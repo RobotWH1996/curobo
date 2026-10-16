@@ -34,7 +34,11 @@ dependencies = [
     "tqdm",
     "trimesh",
     "viser",
-    "warp-lang>=0.10.0",
+    # Jetson AGX Orin (aarch64, CUDA 12 driver) cannot run the Warp 1.18
+    # PyPI wheels, which are built with CUDA 13. 1.17.x is the newest release
+    # whose CUDA 12 wheels still see cuda:0 on this board.
+    "warp-lang>=1.17.0,<1.18.0; platform_machine == 'aarch64'",
+    "warp-lang>=0.10.0; platform_machine != 'aarch64'",
     "wheel",
     "yourdfpy>=0.0.53",
 ]
