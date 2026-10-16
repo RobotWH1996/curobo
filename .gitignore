@@ -1,0 +1,190 @@
+# 编辑器
+.vscode*
+.idea/
+.cursor/
+*.code-workspace
+*swp
+*swo
+*~
+\#*\#
+.\#*
+*Flymake log*
+
+# Python 字节码与缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# 虚拟环境与安装元数据
+.Python
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+__pypackages__/
+.env
+
+# 打包产物
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+nvidia_curobo*/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# uv：库项目不提交锁文件
+uv.lock
+requirements.txt
+
+# PyInstaller
+*.manifest
+*.spec
+
+# 测试与覆盖率
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# 文档构建
+_build/
+docs/_source/
+docs/cpp_api/
+docs/api/*
+docs/modules.rst
+docs/setup.rst
+docs/install_instructions.rst
+docs/doxygen/html/*
+docs/doxygen/xml/*
+/site
+
+# colcon / CMake
+install/
+log/
+.cache/
+compile_commands.json
+COLCON_IGNORE
+
+# 翻译、日志、本地配置
+*.mo
+*.pot
+*.log
+*logs/
+local_settings.py
+
+# 其它构建工具
+.pybuilder/
+target/
+cython_debug/
+.ropeproject
+
+# Jupyter
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# 实验输出与外部下载
+experiments/
+**/outputs/
+**/datasets/
+external/*
+public/*
+docker/pkgs/*
+
+# 性能分析
+*.ncu*
+*.nsys*
+*.qdrep
+*.sql*
+*.nvcudmp
+*.profile
+*.etli
+
+# 生成的数据与中间资源。机器人源文件在文件末尾重新放行。
+*.hdf5
+*.npy
+*.npz
+*.zip
+*.tar
+*.t
+*.p
+*.pt
+*.pth*
+*.engine
+*.cache
+*.flatbuffers
+*.glb
+*.onnx
+*.usd
+*.usda
+*.csv
+*.json
+*.SLDPRT
+*.xacro
+*.gazebo
+*tfevents*
+/examples/*.stl
+
+# 生成图片。文档里的图保留。
+*.svg
+*.SVG
+!docs/images/*.svg
+
+# 仓库里的机器人描述和配置要提交
+!curobo/content/assets/**
+!curobo/content/configs/**
+
+# 本地 IDE、代码格式化和 AI 助手配置（不随源码发布）
+.clangd
+.clang-format
+.clang-tidy
+.editorconfig
+.agent/
+.agents/
+.codex/
+.claude/
+.gemini/
+.aider*
+.cursorrules
+.cursorignore
+.cursorindexingignore
+.windsurf/
+.windsurfrules
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+GEMINI.md
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
