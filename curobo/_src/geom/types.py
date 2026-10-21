@@ -863,8 +863,13 @@ class Mesh(Obstacle):
 
         all_verts = np.concatenate(verts_list, axis=0)
         all_faces = np.concatenate(faces_list, axis=0)
-
-        return Mesh(name, pose=pose, vertices=all_verts.tolist(), faces=all_faces.flatten().tolist())
+        # 保持连续数组。tolist() 会把几万个顶点拆成 Python 对象，上传前再拷回 GPU。
+        return Mesh(
+            name,
+            pose=pose,
+            vertices=np.ascontiguousarray(all_verts, dtype=np.float32),
+            faces=np.ascontiguousarray(all_faces.reshape(-1), dtype=np.int32),
+        )
 
 
 @dataclass

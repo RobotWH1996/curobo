@@ -70,6 +70,7 @@ class MotionPlannerCfg:
         max_goalset: int = 1,
         interpolation_dt: float = 0.025,
         interpolation_buffer_size: int = 1000,
+        trajopt_num_iters: Optional[int] = None,
     ) -> MotionPlannerCfg:
         """Create a MotionPlannerCfg from robot, task, and scene configs.
 
@@ -163,6 +164,9 @@ class MotionPlannerCfg:
                 smaller ``interpolation_dt`` or longer trajectories. Larger
                 buffers can significantly increase GPU memory usage because
                 state buffers are allocated for every batched seed trajectory.
+            trajopt_num_iters: Override the L-BFGS iteration budget. ``None``
+                keeps the task YAML value (100). Must be a multiple of the
+                optimizer ``inner_iters`` (25).
 
         Returns:
             MotionPlannerCfg containing IK, TrajOpt, graph planner, and
@@ -175,8 +179,12 @@ class MotionPlannerCfg:
 
         num_envs = max_batch_size if multi_env else 1
 
-        # Resolve robot config
-        robot_resolved = resolve_config(join_path(get_robot_configs_path(), robot))
+        # Resolve robot config. A dict is an already-loaded robot yaml
+        # (used to lock one arm); a path is joined onto the robot config directory.
+        if isinstance(robot, str):
+            robot_resolved = resolve_config(join_path(get_robot_configs_path(), robot))
+        else:
+            robot_resolved = resolve_config(robot)
         if isinstance(robot_resolved, dict):
             robot_config = RobotCfg.create(robot_resolved, device_cfg, num_envs=num_envs)
         elif isinstance(robot_resolved, RobotCfg):
@@ -247,6 +255,11 @@ class MotionPlannerCfg:
             optimizer_collision_activation_distance=optimizer_collision_activation_distance,
             store_debug=store_debug,
             self_collision_check=self_collision_check,
+            override_optimizer_num_iters=(
+                {"lbfgs": int(trajopt_num_iters)}
+                if trajopt_num_iters is not None
+                else {"lbfgs": None}
+            ),
             transition_model_config_instance_type=transition_model_config_instance_type,
             cost_manager_config_instance_type=cost_manager_config_instance_type,
             max_batch_size=max_batch_size,

@@ -23,12 +23,11 @@ class MotionPlannerResult:
 class WaypointPlanResult:
     """Result of sequential waypoint (via-pose) planning.
 
-    Each Cartesian or joint-space via is planned as a TrajOpt segment. The
-    returned ``interpolated_trajectory`` is a fly-by retiming of those
-    segments: it passes through each via without coming to rest, except at the
-    final goal. If that spline collides, the concatenated rest-to-rest
-    segments are used instead. ``segment_trajectories`` keeps the original
-    rest-to-rest TrajOpt segments.
+    A multi-waypoint request is first solved as one optimization that passes
+    through the waypoints in order. If that solve is unavailable, each via is
+    planned as its own segment and ``interpolated_trajectory`` is a fly-by
+    retiming of those segments. If that spline collides, the concatenated
+    rest-to-rest segments are used instead.
     """
 
     success: Optional[torch.Tensor] = None

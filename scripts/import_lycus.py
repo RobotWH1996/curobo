@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Import Lycus into cuRobo.
 
-Copies URDF + meshes from Lycus_ros, builds capsule collision spheres from
-joint origins (AR5 STLs are millimetre CAD with URDF scale 0.001; SolidWorks
-body meshes are open shells, so MorphIt/VOXEL fits are unreliable).
+Copies URDF + meshes from Lycus_ros. The robot is PD2616-2.1 with
+AR5-5_08 W4C1C5 arms. Running this script rebuilds collision spheres.
+The checked-in lycus.yml keeps the previous hand-tuned spheres and cspace
+values, with link and joint names remapped onto this URDF.
+
+AR5 STLs are millimetre CAD with URDF scale 0.001; SolidWorks body meshes
+are open shells, so MorphIt/VOXEL fits are unreliable.
 
 Active DoF is the 14 arm joints. Torso, head and wheels are locked at 0.
 Default arm pose folds the arms down (joint_2 / joint_4 = 1.57) so the CAD
@@ -26,29 +30,29 @@ import yaml
 LYCUS_ROOT = Path("/home/victor/wh/Lycus_ros/src/lycus_description")
 SRC_URDF = LYCUS_ROOT / "urdf" / "lycus.urdf"
 
-CUROBO_ROOT = Path("/home/victor/wh/curobo/curobo/curobo")
+CUROBO_ROOT = Path("/home/victor/wh/curobo/curobo")
 DST_ASSET = CUROBO_ROOT / "content" / "assets" / "robot" / "lycus"
 DST_MESH = DST_ASSET / "meshes"
 DST_URDF = DST_ASSET / "lycus.urdf"
 DST_YML = CUROBO_ROOT / "content" / "configs" / "robot" / "lycus.yml"
 
 LEFT_ARM_JOINTS = [
-    "AR5-5_08L-W4C1C9-ZY2_joint_1",
-    "AR5-5_08L-W4C1C9-ZY2_joint_2",
-    "AR5-5_08L-W4C1C9-ZY2_joint_3",
-    "AR5-5_08L-W4C1C9-ZY2_joint_4",
-    "AR5-5_08L-W4C1C9-ZY2_joint_5",
-    "AR5-5_08L-W4C1C9-ZY2_joint_6",
-    "AR5-5_08L-W4C1C9-ZY2_joint_7",
+    "AR5-5_08L-W4C1C5-ZY2_joint_1",
+    "AR5-5_08L-W4C1C5-ZY2_joint_2",
+    "AR5-5_08L-W4C1C5-ZY2_joint_3",
+    "AR5-5_08L-W4C1C5-ZY2_joint_4",
+    "AR5-5_08L-W4C1C5-ZY2_joint_5",
+    "AR5-5_08L-W4C1C5-ZY2_joint_6",
+    "AR5-5_08L-W4C1C5-ZY2_joint_7",
 ]
 RIGHT_ARM_JOINTS = [
-    "AR5-5_08R-W4C1C9-ZY2_joint_1",
-    "AR5-5_08R-W4C1C9-ZY2_joint_2",
-    "AR5-5_08R-W4C1C9-ZY2_joint_3",
-    "AR5-5_08R-W4C1C9-ZY2_joint_4",
-    "AR5-5_08R-W4C1C9-ZY2_joint_5",
-    "AR5-5_08R-W4C1C9-ZY2_joint_6",
-    "AR5-5_08R-W4C1C9-ZY2_joint_7",
+    "AR5-5_08R-W4C1C5-ZY2_joint_1",
+    "AR5-5_08R-W4C1C5-ZY2_joint_2",
+    "AR5-5_08R-W4C1C5-ZY2_joint_3",
+    "AR5-5_08R-W4C1C5-ZY2_joint_4",
+    "AR5-5_08R-W4C1C5-ZY2_joint_5",
+    "AR5-5_08R-W4C1C5-ZY2_joint_6",
+    "AR5-5_08R-W4C1C5-ZY2_joint_7",
 ]
 ACTIVE_ARM_JOINTS = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
 TOOL_FRAMES = ["left_arm_ee_link", "right_arm_ee_link"]
@@ -65,10 +69,12 @@ SKIP_COLLISION = {
     "Wheel2_link",
     "Wheel3_link",
     "Wheel4_link",
-    "Shuangmu_link",
-    "Qianyuyan_link",
-    "HouyuyanL_link",
-    "HouyuyanR_link",
+    "HeadRGBD_link",
+    "RGB1_link",
+    "RGB2_link",
+    "RGB3_link",
+    "ChestRGBD_link",
+    "camera_link",
 }
 
 PLACEHOLDER = """v -0.01 -0.01 -0.01
@@ -535,7 +541,7 @@ def postprocess_yaml(
             add_ignore(a, b)
 
     for side in ("L", "R"):
-        prefix = f"AR5-5_08{side}-W4C1C9-ZY2_"
+        prefix = f"AR5-5_08{side}-W4C1C5-ZY2_"
         chain = [f"{prefix}base"] + [f"{prefix}link{i}" for i in range(1, 8)] + [
             f"{prefix}flan_link"
         ]
@@ -548,17 +554,17 @@ def postprocess_yaml(
         add_ignore("Neck_link", f"{prefix}base")
         add_ignore("Waist_link", f"{prefix}base")
 
-    add_ignore("left_arm_ee_link", "AR5-5_08L-W4C1C9-ZY2_link7")
-    add_ignore("left_arm_ee_link", "AR5-5_08L-W4C1C9-ZY2_flan_link")
-    add_ignore("right_arm_ee_link", "AR5-5_08R-W4C1C9-ZY2_link7")
-    add_ignore("right_arm_ee_link", "AR5-5_08R-W4C1C9-ZY2_flan_link")
+    add_ignore("left_arm_ee_link", "AR5-5_08L-W4C1C5-ZY2_link7")
+    add_ignore("left_arm_ee_link", "AR5-5_08L-W4C1C5-ZY2_flan_link")
+    add_ignore("right_arm_ee_link", "AR5-5_08R-W4C1C5-ZY2_link7")
+    add_ignore("right_arm_ee_link", "AR5-5_08R-W4C1C5-ZY2_flan_link")
 
     ignore.setdefault("attached_object", [])
     for link in (
         "left_arm_ee_link",
-        "AR5-5_08L-W4C1C9-ZY2_link6",
-        "AR5-5_08L-W4C1C9-ZY2_link7",
-        "AR5-5_08L-W4C1C9-ZY2_flan_link",
+        "AR5-5_08L-W4C1C5-ZY2_link6",
+        "AR5-5_08L-W4C1C5-ZY2_link7",
+        "AR5-5_08L-W4C1C5-ZY2_flan_link",
     ):
         if link in spheres and "attached_object" not in ignore.get(link, []):
             ignore.setdefault(link, []).append("attached_object")

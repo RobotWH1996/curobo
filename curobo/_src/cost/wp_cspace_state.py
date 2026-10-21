@@ -50,6 +50,11 @@ def forward_cspace_state_warp(
     dof: wp.int32,
     retime_weights: bool,
     retime_regularization_weights: bool,
+    via_enable: wp.array(dtype=wp.int32),
+    via_weight: wp.array(dtype=wp.float32),
+    via_factor: wp.array(dtype=wp.float32),
+    via_idxs: wp.array(dtype=wp.int32),
+    via_position: wp.array(dtype=wp.float32),
 ):
     tid = wp.tid()
     # initialize variables:
@@ -226,6 +231,17 @@ def forward_cspace_state_warp(
         cost_total += cspace_target_w * error * error
         gradient_position += 2.0 * cspace_target_w * error
 
+    # Intermediate waypoints of one trajectory. via_factor is 0 except at the
+    # horizon steps that must pass through a stored joint configuration.
+    if via_enable[0] == 1:
+        via_w = via_weight[0] * cspace_target_dof_w * via_factor[h_id]
+        if via_w > 0.0:
+            via_row = via_idxs[b_id * horizon + h_id]
+            via_q = via_position[via_row * dof + d_id]
+            via_err = current_position - via_q
+            cost_total += via_w * via_err * via_err
+            gradient_position += 2.0 * via_w * via_err
+
 
     cost_total, gradient_velocity = aggregate_squared_l2_regularization(
         current_velocity,
@@ -317,6 +333,11 @@ class StateCSpaceFunction(torch.autograd.Function):
         retime_weights: bool,
         retime_regularization_weights: bool,
         use_grad_input: bool,
+        via_enable: torch.Tensor,
+        via_weight: torch.Tensor,
+        via_factor: torch.Tensor,
+        via_idxs: torch.Tensor,
+        via_position: torch.Tensor,
     ):
         """Compute the bound cost and gradient.
 
@@ -562,6 +583,11 @@ class StateCSpaceFunction(torch.autograd.Function):
                 dof,
                 retime_weights,
                 retime_regularization_weights,
+                wp.from_torch(via_enable.detach().view(-1), dtype=wp.int32),
+                wp.from_torch(via_weight.detach().view(-1), dtype=wp.float32),
+                wp.from_torch(via_factor.detach().view(-1), dtype=wp.float32),
+                wp.from_torch(via_idxs.detach().view(-1), dtype=wp.int32),
+                wp.from_torch(via_position.detach().view(-1), dtype=wp.float32),
             ],
             device=wp_device,
             stream=wp_stream,
@@ -598,6 +624,11 @@ class StateCSpaceFunction(torch.autograd.Function):
             out_ga,
             out_gj,
             out_gtau,
+            via_enable,
+            via_weight,
+            via_factor,
+            via_idxs,
+            via_position,
 
         )
 
@@ -651,6 +682,9 @@ class StateCSpaceFunction(torch.autograd.Function):
             a_g,
             j_g,
             e_g,
+            None,
+            None,
+            None,
             None,
             None,
             None,

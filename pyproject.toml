@@ -34,9 +34,14 @@ dependencies = [
     "tqdm",
     "trimesh",
     "viser",
-    # Jetson AGX Orin (aarch64, CUDA 12 driver) cannot run the Warp 1.18
-    # PyPI wheels, which are built with CUDA 13. 1.17.x is the newest release
-    # whose CUDA 12 wheels still see cuda:0 on this board.
+    # Jetson AGX Orin (aarch64, CUDA 12.6 driver, cuSOLVER 11.6.4):
+    # Warp 1.18 PyPI wheels are built with CUDA 13 and do not see cuda:0.
+    # 1.17.x is the newest release whose CUDA 12 wheels still work on this board.
+    # Torch's libtorch_cuda_linalg.so also needs cusolverDnXsyevBatched, which
+    # cuSOLVER 11.6 does not export. Do not depend on nvidia-cusolver-cu12 11.7:
+    # that library has the symbol, but cusolverDnCreate fails on this driver.
+    # Preload .venv/lib/libcusolver_batched_stub.so (those two symbols only;
+    # every other cuSOLVER symbol stays on the system 11.6 library).
     "warp-lang>=1.17.0,<1.18.0; platform_machine == 'aarch64'",
     "warp-lang>=0.10.0; platform_machine != 'aarch64'",
     "wheel",
