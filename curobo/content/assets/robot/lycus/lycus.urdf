@@ -943,18 +943,156 @@
 
 
 
+  
+  <link name="left_gripper_base">
+    <inertial>
+      <origin xyz="-0.00000523 0.06570019 -0.00103587" rpy="0 0 0" />
+      <mass value="1.5" />
+      <inertia ixx="0.0026878" ixy="-4e-7" ixz="-0.00001004" iyy="0.00114946" iyz="-8.3e-7" izz="0.00291655" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_drive_motor.stl" /></geometry>
+      <material name="gripper_gray"><color rgba="0.7 0.7 0.75 1" /></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_drive_motor.stl" /></geometry>
+    </collision>
+  </link>
+  <joint name="left_gripper_mount" type="fixed">
+    <parent link="AR5-5_08L-W4C1C5-ZY2_flan_link" />
+    <child link="left_gripper_base" />
+    <origin xyz="0 0 0" rpy="1.5707963267948966 0 3.141592653589793" />
+  </joint>
+  <link name="left_gripper_right_jaw">
+    <inertial>
+      <origin xyz="0.10368696 0.05260343 0.00459632" rpy="0 0 0" />
+      <mass value="0.37669236" />
+      <inertia ixx="0.00222515" ixy="-0.00070311" ixz="0.00005481" iyy="0.00057666" iyz="-0.00001146" izz="0.00264626" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_right_finger.stl" /></geometry>
+      <material name="gripper_gray" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_right_finger.stl" /></geometry>
+    </collision>
+  </link>
+  <joint name="left_gripper" type="prismatic">
+    <parent link="left_gripper_base" />
+    <child link="left_gripper_right_jaw" />
+    <origin xyz="0.01 0.1675 0.00072458" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.042" upper="0" effort="10" velocity="3" />
+  </joint>
+  <link name="left_gripper_left_jaw">
+    <inertial>
+      <origin xyz="-0.10368697 0.05260336 0.02729741" rpy="0 0 0" />
+      <mass value="0.37669144" />
+      <inertia ixx="0.00224579" ixy="0.00070311" ixz="0.00009575" iyy="0.00059731" iyz="-0.0002536" izz="0.00264626" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_left_finger.stl" /></geometry>
+      <material name="gripper_gray" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_left_finger.stl" /></geometry>
+    </collision>
+  </link>
+  <joint name="left_gripper_mimic" type="prismatic">
+    <parent link="left_gripper_base" />
+    <child link="left_gripper_left_jaw" />
+    <origin xyz="-0.01 0.1675 -0.02877542" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <mimic joint="left_gripper" multiplier="-1" offset="0" />
+    <limit lower="0" upper="0.042" effort="10" velocity="3" />
+  </joint>
   <link name="left_arm_ee_link" />
   <joint name="left_arm_ee_joint" type="fixed">
-    <parent link="AR5-5_08L-W4C1C5-ZY2_flan_link" />
+    <parent link="left_gripper_base" />
     <child link="left_arm_ee_link" />
     
+    <origin xyz="0 0.2465 0.011975" rpy="0 0 0" />
+  </joint>
+
+  <link name="right_gripper_base">
+    <inertial>
+      <origin xyz="-0.00000523 0.06570019 -0.00103587" rpy="0 0 0" />
+      <mass value="1.5" />
+      <inertia ixx="0.0026878" ixy="-4e-7" ixz="-0.00001004" iyy="0.00114946" iyz="-8.3e-7" izz="0.00291655" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_drive_motor.stl" /></geometry>
+      <material name="gripper_gray" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_drive_motor.stl" /></geometry>
+    </collision>
+  </link>
+  <joint name="right_gripper_mount" type="fixed">
+    <parent link="AR5-5_08R-W4C1C5-ZY2_flan_link" />
+    <child link="right_gripper_base" />
     <origin xyz="0 0 0" rpy="1.5707963267948966 0 0" />
+  </joint>
+  <link name="right_gripper_right_jaw">
+    <inertial>
+      <origin xyz="0.10368696 0.05260343 0.00459632" rpy="0 0 0" />
+      <mass value="0.37669236" />
+      <inertia ixx="0.00222515" ixy="-0.00070311" ixz="0.00005481" iyy="0.00057666" iyz="-0.00001146" izz="0.00264626" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_right_finger.stl" /></geometry>
+      <material name="gripper_gray" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_right_finger.stl" /></geometry>
+    </collision>
+  </link>
+  <joint name="right_gripper" type="prismatic">
+    <parent link="right_gripper_base" />
+    <child link="right_gripper_right_jaw" />
+    <origin xyz="0.01 0.1675 0.00072458" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.042" upper="0" effort="10" velocity="3" />
+  </joint>
+  <link name="right_gripper_left_jaw">
+    <inertial>
+      <origin xyz="-0.10368697 0.05260336 0.02729741" rpy="0 0 0" />
+      <mass value="0.37669144" />
+      <inertia ixx="0.00224579" ixy="0.00070311" ixz="0.00009575" iyy="0.00059731" iyz="-0.0002536" izz="0.00264626" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_left_finger.stl" /></geometry>
+      <material name="gripper_gray" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="meshes/gripper_left_finger.stl" /></geometry>
+    </collision>
+  </link>
+  <joint name="right_gripper_mimic" type="prismatic">
+    <parent link="right_gripper_base" />
+    <child link="right_gripper_left_jaw" />
+    <origin xyz="-0.01 0.1675 -0.02877542" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <mimic joint="right_gripper" multiplier="-1" offset="0" />
+    <limit lower="0" upper="0.042" effort="10" velocity="3" />
   </joint>
   <link name="right_arm_ee_link" />
   <joint name="right_arm_ee_joint" type="fixed">
-    <parent link="AR5-5_08R-W4C1C5-ZY2_flan_link" />
+    <parent link="right_gripper_base" />
     <child link="right_arm_ee_link" />
-    <origin xyz="0 0 0" rpy="1.5707963267948966 0 0" />
+    <origin xyz="0 0.2465 0.011975" rpy="0 0 0" />
   </joint>
   <link name="camera_link" />
   <joint name="head_rgbd_to_camera" type="fixed">

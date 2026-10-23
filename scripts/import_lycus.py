@@ -55,6 +55,8 @@ RIGHT_ARM_JOINTS = [
     "AR5-5_08R-W4C1C5-ZY2_joint_7",
 ]
 ACTIVE_ARM_JOINTS = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
+# Gripper positions are feedback-only; ROS updates their locked transforms.
+GRIPPER_STATE_JOINTS = ("left_gripper", "right_gripper")
 TOOL_FRAMES = ["left_arm_ee_link", "right_arm_ee_link"]
 
 # CAD T-pose. Capsule spheres are collision-free here; folding joint_2/4
@@ -559,12 +561,30 @@ def postprocess_yaml(
     add_ignore("right_arm_ee_link", "AR5-5_08R-W4C1C5-ZY2_link7")
     add_ignore("right_arm_ee_link", "AR5-5_08R-W4C1C5-ZY2_flan_link")
 
+    # Grippers are locked, with measured transforms updated by ROS. Adjacent parts overlap
+    # at the mount, and the two jaws are a mimic pair that is allowed to meet.
+    for side, prefix in (("left", "AR5-5_08L-W4C1C5-ZY2_"), ("right", "AR5-5_08R-W4C1C5-ZY2_")):
+        base = f"{side}_gripper_base"
+        jaws = (f"{side}_gripper_right_jaw", f"{side}_gripper_left_jaw")
+        ee = f"{side}_arm_ee_link"
+        neighbors = (f"{prefix}flan_link", f"{prefix}link7", ee)
+        for neighbor in neighbors:
+            add_ignore(base, neighbor)
+            for jaw in jaws:
+                add_ignore(jaw, neighbor)
+        add_ignore(base, jaws[0])
+        add_ignore(base, jaws[1])
+        add_ignore(jaws[0], jaws[1])
+
     ignore.setdefault("attached_object", [])
     for link in (
         "left_arm_ee_link",
         "AR5-5_08L-W4C1C5-ZY2_link6",
         "AR5-5_08L-W4C1C5-ZY2_link7",
         "AR5-5_08L-W4C1C5-ZY2_flan_link",
+        "left_gripper_base",
+        "left_gripper_right_jaw",
+        "left_gripper_left_jaw",
     ):
         if link in spheres and "attached_object" not in ignore.get(link, []):
             ignore.setdefault(link, []).append("attached_object")
@@ -574,13 +594,25 @@ def postprocess_yaml(
 
     n = len(names)
     if n:
-        cspace["cspace_distance_weight"] = [1.0] * n
-        cspace["null_space_weight"] = [1.0] * n
+        cspace["cspace_distance_weight"] = [
+            0.0 if j in GRIPPER_STATE_JOINTS else 1.0 for j in names
+        ]
+        cspace["null_space_weight"] = [
+            0.0 if j in GRIPPER_STATE_JOINTS else 1.0 for j in names
+        ]
         cspace["default_joint_position"] = [
             float(INITIAL_POSITIONS.get(j, 0.0)) for j in names
         ]
         cspace["max_acceleration"] = 3.0
         cspace["max_jerk"] = 500.0
+        for scale_key, fill in (("velocity_scale", 1.0), ("acceleration_scale", 1.0), ("jerk_scale", 1.0)):
+            values = cspace.get(scale_key)
+            if not isinstance(values, list) or len(values) != n:
+                values = [fill] * n
+            cspace[scale_key] = [
+                1.0 if names[i] in GRIPPER_STATE_JOINTS else float(values[i])
+                for i in range(n)
+            ]
         kin["cspace"] = cspace
     dumped = yaml.safe_dump({"robot_cfg": {"kinematics": kin}}, sort_keys=False)
     path.write_text(

@@ -1,5 +1,6 @@
 # 模型是 PD2616-2.1 / AR5-5_08-W4C1C5。
 # 碰撞球、cspace、自碰忽略沿用上一台 Lycus，只改了连杆和关节名。
+# 夹爪仅接收实测状态，不参与优化；ROS 在每次规划前原地更新夹爪及 mimic 手指几何。
 # Lycus cuRobo robot config.
 # Planning uses collision_spheres; visualization uses URDF/STL.
 # Regenerate with: python scripts/import_lycus.py
@@ -30,6 +31,9 @@ robot_cfg:
     - AR5-5_08L-W4C1C5-ZY2_link6
     - AR5-5_08L-W4C1C5-ZY2_link7
     - AR5-5_08L-W4C1C5-ZY2_flan_link
+    - left_gripper_base
+    - left_gripper_right_jaw
+    - left_gripper_left_jaw
     - AR5-5_08R-W4C1C5-ZY2_base
     - AR5-5_08R-W4C1C5-ZY2_link1
     - AR5-5_08R-W4C1C5-ZY2_link2
@@ -39,6 +43,9 @@ robot_cfg:
     - AR5-5_08R-W4C1C5-ZY2_link6
     - AR5-5_08R-W4C1C5-ZY2_link7
     - AR5-5_08R-W4C1C5-ZY2_flan_link
+    - right_gripper_base
+    - right_gripper_right_jaw
+    - right_gripper_left_jaw
     - left_arm_ee_link
     - right_arm_ee_link
     # 每个碰撞球再加的半径（米）。YAML 里 radius 为 0 的球实际按 0.002 m 碰撞。
@@ -601,10 +608,15 @@ robot_cfg:
         radius: 0.06
       AR5-5_08L-W4C1C5-ZY2_link6:
       - center:
-        - -0.0002
+        - -0.0098
         - 0.0034
         - 0.0195
-        radius: 0.055
+        radius: 0.05
+      - center:
+        - 0.0118
+        - 0.0034
+        - 0.02
+        radius: 0.05
       AR5-5_08L-W4C1C5-ZY2_link7:
       - center:
         - 0.0004
@@ -617,6 +629,104 @@ robot_cfg:
         - 0.0
         - 0.0
         radius: 0.0
+      left_gripper_base:
+      - center:
+        - 0.0
+        - 0.0321
+        - -0.001
+        radius: 0.045
+      - center:
+        - 0.0
+        - 0.065
+        - -0.001
+        radius: 0.045
+      - center:
+        - 0.0
+        - 0.0326
+        - -0.001
+        radius: 0.045
+      - center:
+        - 0.0
+        - 0.105
+        - -0.001
+        radius: 0.045
+      left_gripper_right_jaw:
+      - center:
+        - 0.1139
+        - 0.0156
+        - -0.0051
+        radius: 0.03
+      - center:
+        - 0.0961
+        - -0.0198
+        - -0.0049
+        radius: 0.03
+      - center:
+        - 0.1364
+        - 0.0606
+        - -0.0041
+        radius: 0.03
+      - center:
+        - 0.1368
+        - 0.1097
+        - 0.0004
+        radius: 0.03
+      - center:
+        - 0.1186
+        - 0.169
+        - 0.0279
+        radius: 0.03
+      - center:
+        - 0.1452
+        - 0.1889
+        - -0.0024
+        radius: 0.025
+      - center:
+        - 0.1406
+        - 0.1559
+        - -0.0115
+        radius: 0.025
+      left_gripper_left_jaw:
+      - center:
+        - -0.1109
+        - 0.0076
+        - 0.0174
+        radius: 0.03
+      - center:
+        - -0.0776
+        - -0.0238
+        - 0.0134
+        radius: 0.03
+      - center:
+        - -0.1327
+        - 0.0568
+        - 0.0306
+        radius: 0.03
+      - center:
+        - -0.12
+        - 0.0
+        - 0.039
+        radius: 0.03
+      - center:
+        - -0.1342
+        - 0.1097
+        - 0.0302
+        radius: 0.03
+      - center:
+        - -0.1294
+        - 0.1675
+        - 0.0571
+        radius: 0.035
+      - center:
+        - -0.1339
+        - 0.1761
+        - 0.0286
+        radius: 0.025
+      - center:
+        - -0.1339
+        - 0.1523
+        - 0.0286
+        radius: 0.025
       AR5-5_08R-W4C1C5-ZY2_base:
       - center:
         - 0.0012
@@ -659,7 +769,7 @@ robot_cfg:
         - 0.0037
         - 0.0021
         - 0.1449
-        radius: 0.05
+        radius: 0.055
       AR5-5_08R-W4C1C5-ZY2_link3:
       - center:
         - -0.0018
@@ -716,14 +826,19 @@ robot_cfg:
       - center:
         - -0.0008
         - -0.0022
-        - -0.0159
+        - -0.0145
         radius: 0.06
       AR5-5_08R-W4C1C5-ZY2_link6:
       - center:
-        - -0.0002
+        - -0.0232
         - -0.0034
-        - 0.0195
-        radius: 0.055
+        - 0.0205
+        radius: 0.045
+      - center:
+        - 0.0167
+        - -0.0034
+        - 0.0205
+        radius: 0.045
       AR5-5_08R-W4C1C5-ZY2_link7:
       - center:
         - 0.0004
@@ -736,6 +851,99 @@ robot_cfg:
         - 0.0
         - 0.0
         radius: 0.0
+      right_gripper_base:
+      - center:
+        - 0.0
+        - 0.0302
+        - -0.001
+        radius: 0.045
+      - center:
+        - 0.0
+        - 0.065
+        - -0.001
+        radius: 0.045
+      - center:
+        - 0.0
+        - 0.105
+        - -0.001
+        radius: 0.05
+      right_gripper_right_jaw:
+      - center:
+        - 0.1113
+        - 0.017
+        - -0.005
+        radius: 0.03
+      - center:
+        - 0.0884
+        - -0.0199
+        - 0.0002
+        radius: 0.03
+      - center:
+        - 0.1284
+        - 0.0583
+        - -0.0031
+        radius: 0.025
+      - center:
+        - 0.1319
+        - 0.0949
+        - -0.0047
+        radius: 0.025
+      - center:
+        - 0.1189
+        - 0.1761
+        - 0.0306
+        radius: 0.03
+      - center:
+        - 0.1352
+        - 0.174
+        - -0.004
+        radius: 0.025
+      - center:
+        - 0.1361
+        - 0.132
+        - -0.0049
+        radius: 0.025
+      right_gripper_left_jaw:
+      - center:
+        - -0.1109
+        - 0.0076
+        - 0.0228
+        radius: 0.03
+      - center:
+        - -0.0776
+        - -0.0238
+        - 0.0134
+        radius: 0.03
+      - center:
+        - -0.1327
+        - 0.0568
+        - 0.0306
+        radius: 0.03
+      - center:
+        - -0.12
+        - 0.0005
+        - 0.0236
+        radius: 0.03
+      - center:
+        - -0.1342
+        - 0.1097
+        - 0.0302
+        radius: 0.03
+      - center:
+        - -0.1211
+        - 0.1675
+        - 0.0571
+        radius: 0.035
+      - center:
+        - -0.1339
+        - 0.1761
+        - 0.0286
+        radius: 0.025
+      - center:
+        - -0.1339
+        - 0.1523
+        - 0.0286
+        radius: 0.025
       left_arm_ee_link:
       - center:
         - 0.0
@@ -748,9 +956,9 @@ robot_cfg:
         - 0.0
         - 0.0
         radius: 0.0
-    # 关节空间。按关节排的列表顺序都是 joint_names：左臂 7、右臂 7、小腿、大腿、腰、胸、脖子、头。
+    # 关节空间。按关节排的列表顺序都是 joint_names：左臂 7、右臂 7、小腿、大腿、腰、胸、脖子、头、左夹爪、右夹爪。
     cspace:
-      # 20 个关节的顺序。后面按关节排的列表都跟这个对齐。
+      # 22 个关节的顺序。后面按关节排的列表都跟这个对齐。加载后活动关节会按运动学树重排。
       joint_names:
         - AR5-5_08L-W4C1C5-ZY2_joint_1
         - AR5-5_08L-W4C1C5-ZY2_joint_2
@@ -772,7 +980,9 @@ robot_cfg:
         - Chest_joint # 胸部，左右扭转
         - Neck_joint
         - Head_joint
-      # 乘在 URDF 速度上限上，只乘一次。1.0 时速度上限等于 URDF。前 14 项是两只手臂。
+        - left_gripper
+        - right_gripper
+      # 乘在 URDF 速度上限上，只乘一次。1.0 时速度上限等于 URDF。前 14 项是两只手臂。夹爪已锁定，不使用优化限速来模拟固定。
       velocity_scale:
         - 1.0
         - 1.0
@@ -794,7 +1004,9 @@ robot_cfg:
         - 1.0
         - 1.0
         - 1.0
-      # 关节加速度上限（rad/s^2），顺序同 joint_names，再乘 acceleration_scale。
+        - 1.0
+        - 1.0
+      # 关节加速度上限（rad/s^2），顺序同 joint_names，再乘 acceleration_scale。夹爪已锁定，不参与优化。
       max_acceleration:
         - 3.0
         - 3.0
@@ -816,8 +1028,12 @@ robot_cfg:
         - 3.0
         - 3.0
         - 3.0
-      # 乘在 max_acceleration 上，只乘一次。1.0 时加速度上限仍是 3.0 rad/s^2。
+        - 3.0
+        - 3.0
+      # 乘在 max_acceleration 上，只乘一次。1.0 时加速度上限仍是 3.0 rad/s^2。夹爪已锁定，不参与优化。
       acceleration_scale:
+        - 1.0
+        - 1.0
         - 1.0
         - 1.0
         - 1.0
@@ -860,8 +1076,12 @@ robot_cfg:
         - 500.0
         - 500.0
         - 500.0
+        - 500.0
+        - 500.0
       # 乘在 max_jerk 上，只乘一次。
       jerk_scale:
+        - 1.0
+        - 1.0
         - 1.0
         - 1.0
         - 1.0
@@ -904,6 +1124,8 @@ robot_cfg:
         - 0.0
         - 0.0
         - 0.0
+        - 0.0
+        - 0.0
       # 默认关节角（rad）。IK 偏好姿态，也是优化器热身的初始姿态。
       default_joint_position:
         - 0.0
@@ -926,7 +1148,9 @@ robot_cfg:
         - 0.0
         - 0.0
         - 0.0
-      # IK 零空间正则的关节权重。多余自由度会往 default_joint_position 靠。
+        - 0.0
+        - 0.0
+      # IK 零空间正则的关节权重。多余自由度会往 default_joint_position 靠。夹爪权重为 0，不往张开位置拉。
       null_space_weight:
         - 1.0
         - 1.0
@@ -948,6 +1172,8 @@ robot_cfg:
         - 1.0
         - 1.0
         - 1.0
+        - 0.0
+        - 0.0
       # 零空间允许偏离默认姿态的范围，相对该关节活动范围的比例。1.0 表示用满。
       null_space_maximum_distance:
         - 1.0
@@ -970,6 +1196,8 @@ robot_cfg:
         - 1.0
         - 1.0
         - 1.0
+        - 0.0
+        - 0.0
       # 图搜索里各关节的距离权重。1.0 表示各关节同等看待。
       cspace_distance_weight:
         - 1.0
@@ -992,6 +1220,8 @@ robot_cfg:
         - 1.0
         - 1.0
         - 1.0
+        - 0.0
+        - 0.0
     # 调试信息，空。
     debug: null
     # 旧的外部资源路径，不用。
@@ -1025,6 +1255,7 @@ robot_cfg:
     # false：不把网格连杆再加进末端列表。
     load_tool_frames_with_mesh: false
     # 这些关节固定在给定角度，不参与规划。躯干锁在 0，手臂不会靠扭腰够目标。
+    # 夹爪锁定为非优化关节；下面是初始化值，运行时由 /joint_states 更新。
     lock_joints:
       Calf_joint: 0.0
       Thigh_joint: 0.0
@@ -1032,6 +1263,8 @@ robot_cfg:
       Chest_joint: 0.0
       Neck_joint: 0.0
       Head_joint: 0.0
+      left_gripper: 0.0
+      right_gripper: 0.0
     # 要加载网格的连杆。
     mesh_link_names:
     - Chassis_link
@@ -1057,6 +1290,12 @@ robot_cfg:
     - AR5-5_08R-W4C1C5-ZY2_link5
     - AR5-5_08R-W4C1C5-ZY2_link6
     - AR5-5_08R-W4C1C5-ZY2_link7
+    - left_gripper_base
+    - left_gripper_right_jaw
+    - left_gripper_left_jaw
+    - right_gripper_base
+    - right_gripper_right_jaw
+    - right_gripper_left_jaw
     # 自碰额外间距（米）。加载时会减去 collision_sphere_buffer，避免余量算两遍。
     self_collision_buffer:
       Chassis_link: 0.0
@@ -1076,6 +1315,9 @@ robot_cfg:
       AR5-5_08L-W4C1C5-ZY2_link6: 0.0
       AR5-5_08L-W4C1C5-ZY2_link7: 0.0
       AR5-5_08L-W4C1C5-ZY2_flan_link: 0.0
+      left_gripper_base: 0.0
+      left_gripper_right_jaw: 0.0
+      left_gripper_left_jaw: 0.0
       AR5-5_08R-W4C1C5-ZY2_base: 0.0
       AR5-5_08R-W4C1C5-ZY2_link1: 0.0
       AR5-5_08R-W4C1C5-ZY2_link2: 0.0
@@ -1085,6 +1327,9 @@ robot_cfg:
       AR5-5_08R-W4C1C5-ZY2_link6: 0.0
       AR5-5_08R-W4C1C5-ZY2_link7: 0.0
       AR5-5_08R-W4C1C5-ZY2_flan_link: 0.0
+      right_gripper_base: 0.0
+      right_gripper_right_jaw: 0.0
+      right_gripper_left_jaw: 0.0
       left_arm_ee_link: 0.0
       right_arm_ee_link: 0.0
     # 这些连杆对不做自碰，避免相邻连杆的球叠在一起被当成自己撞自己。只写一个方向即可。
@@ -1102,6 +1347,9 @@ robot_cfg:
       - AR5-5_08L-W4C1C5-ZY2_link5
       - AR5-5_08L-W4C1C5-ZY2_link6
       - attached_object
+      - left_gripper_base
+      - left_gripper_right_jaw
+      - left_gripper_left_jaw
       AR5-5_08L-W4C1C5-ZY2_link1:
       - AR5-5_08L-W4C1C5-ZY2_base
       - AR5-5_08L-W4C1C5-ZY2_link2
@@ -1150,6 +1398,9 @@ robot_cfg:
       - AR5-5_08L-W4C1C5-ZY2_link4
       - AR5-5_08L-W4C1C5-ZY2_link5
       - attached_object
+      - left_gripper_base
+      - left_gripper_right_jaw
+      - left_gripper_left_jaw
       AR5-5_08R-W4C1C5-ZY2_base:
       - Chest_link
       - AR5-5_08R-W4C1C5-ZY2_link1
@@ -1162,6 +1413,9 @@ robot_cfg:
       - right_arm_ee_link
       - AR5-5_08R-W4C1C5-ZY2_link5
       - AR5-5_08R-W4C1C5-ZY2_link6
+      - right_gripper_base
+      - right_gripper_right_jaw
+      - right_gripper_left_jaw
       AR5-5_08R-W4C1C5-ZY2_link1:
       - AR5-5_08R-W4C1C5-ZY2_base
       - AR5-5_08R-W4C1C5-ZY2_link2
@@ -1208,6 +1462,9 @@ robot_cfg:
       - right_arm_ee_link
       - AR5-5_08R-W4C1C5-ZY2_link4
       - AR5-5_08R-W4C1C5-ZY2_link5
+      - right_gripper_base
+      - right_gripper_right_jaw
+      - right_gripper_left_jaw
       Calf_link:
       - Chassis_link
       - Thigh_link
@@ -1273,18 +1530,66 @@ robot_cfg:
       - Head_link
       - AR5-5_08L-W4C1C5-ZY2_base
       - AR5-5_08R-W4C1C5-ZY2_base
+      left_gripper_base:
+      - AR5-5_08L-W4C1C5-ZY2_flan_link
+      - AR5-5_08L-W4C1C5-ZY2_link7
+      - left_gripper_right_jaw
+      - left_gripper_left_jaw
+      - left_arm_ee_link
+      - attached_object
+      left_gripper_right_jaw:
+      - left_gripper_base
+      - left_gripper_left_jaw
+      - left_arm_ee_link
+      - AR5-5_08L-W4C1C5-ZY2_flan_link
+      - AR5-5_08L-W4C1C5-ZY2_link7
+      - attached_object
+      left_gripper_left_jaw:
+      - left_gripper_base
+      - left_gripper_right_jaw
+      - left_arm_ee_link
+      - AR5-5_08L-W4C1C5-ZY2_flan_link
+      - AR5-5_08L-W4C1C5-ZY2_link7
+      - attached_object
+      right_gripper_base:
+      - AR5-5_08R-W4C1C5-ZY2_flan_link
+      - AR5-5_08R-W4C1C5-ZY2_link7
+      - right_gripper_right_jaw
+      - right_gripper_left_jaw
+      - right_arm_ee_link
+      right_gripper_right_jaw:
+      - right_gripper_base
+      - right_gripper_left_jaw
+      - right_arm_ee_link
+      - AR5-5_08R-W4C1C5-ZY2_flan_link
+      - AR5-5_08R-W4C1C5-ZY2_link7
+      right_gripper_left_jaw:
+      - right_gripper_base
+      - right_gripper_right_jaw
+      - right_arm_ee_link
+      - AR5-5_08R-W4C1C5-ZY2_flan_link
+      - AR5-5_08R-W4C1C5-ZY2_link7
       left_arm_ee_link:
       - AR5-5_08L-W4C1C5-ZY2_flan_link
       - AR5-5_08L-W4C1C5-ZY2_link7
       - attached_object
+      - left_gripper_base
+      - left_gripper_right_jaw
+      - left_gripper_left_jaw
       right_arm_ee_link:
       - AR5-5_08R-W4C1C5-ZY2_flan_link
       - AR5-5_08R-W4C1C5-ZY2_link7
+      - right_gripper_base
+      - right_gripper_right_jaw
+      - right_gripper_left_jaw
       attached_object:
       - left_arm_ee_link
       - AR5-5_08L-W4C1C5-ZY2_link6
       - AR5-5_08L-W4C1C5-ZY2_link7
       - AR5-5_08L-W4C1C5-ZY2_flan_link
+      - left_gripper_base
+      - left_gripper_right_jaw
+      - left_gripper_left_jaw
     # 要求解位姿的末端。
     tool_frames:
     - left_arm_ee_link

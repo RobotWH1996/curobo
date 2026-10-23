@@ -19,6 +19,7 @@ from curobo._src.geom.types import SceneCfg, Sphere
 from curobo._src.robot.kinematics.kinematics import Kinematics, KinematicsCfg
 from curobo._src.robot.loader.util import load_robot_yaml
 from curobo._src.state.state_joint import JointState
+from curobo._src.state.state_joint_ops import append_joints_to_state
 from curobo._src.types.content_path import ContentPath
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
@@ -1000,6 +1001,69 @@ class ViserVisualizer:
         )
         return transform_control
 
+    def _exported_mimic_positions(self, joint_state: JointState) -> Dict[str, torch.Tensor]:
+        """Map renamed exported mimic joints back onto the active joint value.
+
+        Export gives a mimic follower a ``parent_to_child_joint`` name and flips
+        its axis when the mimic scale is negative. The URDF joint then takes the
+        same value as the active joint.
+        """
+        robot_model = getattr(self, "_robot_model", None)
+        parser = None if robot_model is None else getattr(robot_model, "kinematics_parser", None)
+        mimic = self._kinematics.config.kinematics_config.mimic_joints or {}
+        if parser is None or not mimic:
+            return {}
+        joint_map = parser._robot.joint_map
+        names = joint_state.joint_names
+        position = joint_state.position
+        values = {}
+        for active_name, followers in mimic.items():
+            if active_name not in names:
+                continue
+            active_q = position[..., names.index(active_name)]
+            for follower in followers:
+                joint = joint_map.get(follower["joint_name"])
+                if joint is None:
+                    continue
+                values[f"{joint.parent}_to_{joint.child}_joint"] = active_q
+        return values
+
+    def _joint_state_for_urdf(self, joint_state: JointState) -> JointState:
+        """Fill URDF joints the viewer needs without listing a locked joint twice.
+
+        ``get_full_js`` appends locked joints and rejects a state that already
+        contains them. The displayed URDF also has mimic followers under a
+        generated name, plus any actuated joint that is outside the planner.
+        """
+        lock_state = self._kinematics.lock_jointstate
+        lock_names = [] if lock_state is None else list(lock_state.joint_names)
+        active_names = list(self._kinematics.joint_names)
+        names = joint_state.joint_names
+        if any(name in names for name in lock_names) and all(
+            name in names for name in active_names
+        ):
+            joint_state = self._kinematics.get_active_js(joint_state)
+        joint_state = self._kinematics.get_full_js(joint_state)
+        mimic_state = self._kinematics.get_mimic_js(joint_state)
+        if mimic_state is not None:
+            joint_state = mimic_state
+        missing = [name for name in self._viser_joint_names if name not in joint_state.joint_names]
+        if not missing:
+            return joint_state
+        position = joint_state.position
+        extra_position = torch.zeros(
+            position.shape[:-1] + (len(missing),),
+            device=position.device,
+            dtype=position.dtype,
+        )
+        alias_position = self._exported_mimic_positions(joint_state)
+        for index, name in enumerate(missing):
+            active_q = alias_position.get(name)
+            if active_q is not None:
+                extra_position[..., index] = active_q
+        extra = JointState.from_position(extra_position, joint_names=missing)
+        return append_joints_to_state(joint_state, extra)
+
     def reset_robot(self):
         joint_state = self._kinematics.get_full_js(self._kinematics.default_joint_state)
         self.set_joint_state(joint_state)
@@ -1045,7 +1109,7 @@ class ViserVisualizer:
         if viser_set != js_set:
             missing_from_js = viser_set - js_set
             if missing_from_js:
-                joint_state = self._kinematics.get_full_js(joint_state)
+                joint_state = self._joint_state_for_urdf(joint_state)
 
         self._last_joint_state = joint_state.clone()
         if self._visualize_robot_spheres:
