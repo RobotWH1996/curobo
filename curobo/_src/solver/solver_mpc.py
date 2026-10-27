@@ -669,20 +669,6 @@ class MPCSolver:
 
         metrics_result = self.metrics_rollout.compute_metrics_from_action(opt_result)
 
-        feasible_mask = metrics_result.costs_and_constraints.get_feasible(
-            include_all_hybrid=False, sum_horizon=False
-        )
-        feasible_mask = torch.all(
-            feasible_mask[:, : int(self.config.interpolation_steps * 2)], dim=-1
-        )
-
-        if torch.count_nonzero(feasible_mask) < self.problem_batch_size and False:
-            new_seed_trajectory = self.prepare_safe_deceleration_trajectory(
-                current_state=current_state.clone(), failed_mask=~feasible_mask
-            )
-            best_actions[~feasible_mask] = new_seed_trajectory[~feasible_mask]
-            metrics_result = self.metrics_rollout.compute_metrics_from_action(best_actions)
-
         self.trajectory_execution_manager.update_robot_state_trajectory(metrics_result.state)
         self.trajectory_execution_manager.update_state_action_metrics_buffers(
             metrics_result.state.joint_state, best_actions, metrics_result

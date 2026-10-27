@@ -1016,8 +1016,8 @@
   <joint name="left_arm_ee_joint" type="fixed">
     <parent link="left_gripper_base" />
     <child link="left_arm_ee_link" />
-    
-    <origin xyz="0 0.2465 0.011975" rpy="0 0 0" />
+    <!-- Midpoint of the two jaws. Frame is rotated 180 deg clockwise about parent +Y. -->
+    <origin xyz="0 0.2465 0.011975" rpy="0 -3.141592653589793 0" />
   </joint>
 
   <link name="right_gripper_base">
@@ -1092,7 +1092,8 @@
   <joint name="right_arm_ee_joint" type="fixed">
     <parent link="right_gripper_base" />
     <child link="right_arm_ee_link" />
-    <origin xyz="0 0.2465 0.011975" rpy="0 0 0" />
+    <!-- Midpoint of the two jaws. Frame is rotated 180 deg clockwise about parent +Y. -->
+    <origin xyz="0 0.2465 0.011975" rpy="0 -3.141592653589793 0" />
   </joint>
   <link name="camera_link" />
   <joint name="head_rgbd_to_camera" type="fixed">
