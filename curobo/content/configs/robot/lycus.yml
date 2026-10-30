@@ -21,7 +21,7 @@ robot_cfg:
     - Chest_link
     - Neck_link
     - Head_link
-    - camera_link
+    - camera_01_link
     - AR5-5_08L-W4C1C5-ZY2_base
     - AR5-5_08L-W4C1C5-ZY2_link1
     - AR5-5_08L-W4C1C5-ZY2_link2
@@ -499,7 +499,7 @@ robot_cfg:
         - -0.025
         - 0.0606
         radius: 0.03
-      camera_link:
+      camera_01_link:
       - center:
         - 0.0
         - 0.0
@@ -1305,7 +1305,7 @@ robot_cfg:
       Chest_link: 0.0
       Neck_link: 0.0
       Head_link: 0.0
-      camera_link: 0.0
+      camera_01_link: 0.0
       AR5-5_08L-W4C1C5-ZY2_base: 0.0
       AR5-5_08L-W4C1C5-ZY2_link1: 0.0
       AR5-5_08L-W4C1C5-ZY2_link2: 0.0
@@ -1499,7 +1499,7 @@ robot_cfg:
       - Thigh_link
       Head_link:
       - Neck_link
-      - camera_link
+      - camera_01_link
       - Chassis_link
       - Calf_link
       - Thigh_link

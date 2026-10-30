@@ -1095,10 +1095,10 @@
     <!-- Midpoint of the two jaws. Frame is rotated 180 deg clockwise about parent +Y. -->
     <origin xyz="0 0.2465 0.011975" rpy="0 -3.141592653589793 0" />
   </joint>
-  <link name="camera_link" />
+  <link name="camera_01_link" />
   <joint name="head_rgbd_to_camera" type="fixed">
     <parent link="HeadRGBD_link" />
-    <child link="camera_link" />
+    <child link="camera_01_link" />
     <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
 </robot>
