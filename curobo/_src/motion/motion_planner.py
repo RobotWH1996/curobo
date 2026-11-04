@@ -979,6 +979,7 @@ class MotionPlanner:
         finetune_attempts: Optional[int],
         poses: Optional[List[GoalToolPose]] = None,
         seed_chains: Optional[List[List[JointState]]] = None,
+        waypoint_weight_scale: float = 1.0,
     ) -> Tuple[Optional[WaypointPlanResult], float, float]:
         """One ``solve_cspace`` whose intermediate states pass through the waypoints.
 
@@ -991,7 +992,8 @@ class MotionPlanner:
         def _bail() -> Tuple[Optional[WaypointPlanResult], float, float]:
             return None, time.perf_counter() - t0, 0.0
 
-        if len(goal_states) < 2:
+        if (len(goal_states) < 2 or not math.isfinite(waypoint_weight_scale)
+                or waypoint_weight_scale <= 0.0):
             return _bail()
         q = self.kinematics.get_active_js(
             _squeeze_joint_state_to_2d(current_state.clone())
@@ -1059,6 +1061,9 @@ class MotionPlanner:
         if steps is None:
             return _bail()
         try:
+            if waypoint_weight_scale != 1.0:
+                for cost in self._cspace_costs():
+                    cost._via_weight.mul_(waypoint_weight_scale)
             result = self.trajopt_solver.solve_cspace(
                 active_goals[-1],
                 q,
@@ -1087,9 +1092,16 @@ class MotionPlanner:
         check_s = time.perf_counter() - t_check
         if not accepted or traj is None:
             return None, joint_s, check_s
+        sample_info = self._waypoint_sample_indices(traj, steps, state_dt)
+        if sample_info is None:
+            return None, joint_s, check_s
+        indices, output_dt = sample_info
+        waypoint_times = [index * output_dt for index in indices]
+        waypoint_times.append((_traj_position_2d(traj).shape[0] - 1) * output_dt)
         return (
             WaypointPlanResult(
                 success=torch.ones(1, dtype=torch.bool, device=q.position.device),
+                waypoint_times=waypoint_times,
                 interpolated_trajectory=traj,
                 segment_trajectories=[traj],
                 failed_index=None,
@@ -1216,18 +1228,10 @@ class MotionPlanner:
             return None
         return dt
 
-    def _sample_waypoint_positions(
-        self,
-        traj: JointState,
-        steps: List[int],
-        state_dt: Optional[float],
-    ) -> Optional[torch.Tensor]:
-        """Evaluate output positions at exact via times, returning ``[vias, dof]``.
-
-        Use cubic Hermite interpolation for position/velocity commands and
-        linear interpolation for position-only commands. Never clamp a waypoint
-        outside the output trajectory to an unrelated endpoint.
-        """
+    def _waypoint_sample_indices(
+        self, traj: JointState, steps: List[int], state_dt: Optional[float],
+    ) -> Optional[Tuple[List[float], float]]:
+        """Return validated via indices on the exported trajectory and its dt."""
         if state_dt is None or not math.isfinite(state_dt) or state_dt <= 0.0:
             return None
         if not steps or steps[0] <= 0 or any(b <= a for a, b in zip(steps, steps[1:])):
@@ -1259,6 +1263,26 @@ class MotionPlanner:
             sample_times = [step * state_dt / output_dt for step in steps]
         if any(not math.isfinite(t) or t > last + 1e-5 for t in sample_times):
             return None
+        return sample_times, output_dt
+
+    def _sample_waypoint_positions(
+        self,
+        traj: JointState,
+        steps: List[int],
+        state_dt: Optional[float],
+    ) -> Optional[torch.Tensor]:
+        """Evaluate output positions at exact via times, returning ``[vias, dof]``.
+
+        Use cubic Hermite interpolation for position/velocity commands and
+        linear interpolation for position-only commands. Never clamp a waypoint
+        outside the output trajectory to an unrelated endpoint.
+        """
+        sample_info = self._waypoint_sample_indices(traj, steps, state_dt)
+        if sample_info is None:
+            return None
+        sample_times, output_dt = sample_info
+        pos = _traj_position_2d(traj)
+        last = pos.shape[0] - 1
         times = torch.tensor(sample_times, device=pos.device, dtype=pos.dtype).clamp(max=last)
         left = times.floor().long().clamp(max=last - 1)
         u = (times - left).unsqueeze(-1)
@@ -1327,9 +1351,10 @@ class MotionPlanner:
             return False
         positions = torch.cat((sampled, pos[-1:]), dim=0)
         try:
-            kin = self.compute_kinematics(
+            sampled_state = self.kinematics.get_active_js(
                 JointState.from_position(positions, joint_names=traj.joint_names)
             )
+            kin = self.compute_kinematics(sampled_state)
             tool = kin.tool_poses
             if tool is None:
                 return False
@@ -1348,36 +1373,38 @@ class MotionPlanner:
             if not all(math.isfinite(t) and t >= 0.0 for t in (pos_tol, ori_tol)):
                 return False
             frames = list(tool.tool_frames)
+            requested_p, requested_q, actual_p, actual_q, labels = [], [], [], [], []
             for i, goal in enumerate(poses):
                 if goal.position.ndim != 5 or goal.quaternion.ndim != 5:
-                    return False
-                goal_p = goal.position[0, 0, :, 0, :]
-                goal_q = goal.quaternion[0, 0, :, 0, :]
-                if not bool(torch.isfinite(goal_p).all() & torch.isfinite(goal_q).all()):
                     return False
                 for li, name in enumerate(goal.tool_frames):
                     if name not in frames:
                         log_warn(f"Waypoint pose check has no FK frame {name}")
                         return False
                     fi = frames.index(name)
-                    pos_err = float(torch.linalg.norm(fk_p[i, fi] - goal_p[li]).item())
-                    ori_err = float(
-                        angular_distance_axis_angle(
-                            goal_q[li], fk_q[i, fi]
-                        ).reshape(-1)[0].item()
+                    requested_p.append(goal.position[0, 0, li, 0])
+                    requested_q.append(goal.quaternion[0, 0, li, 0])
+                    actual_p.append(fk_p[i, fi])
+                    actual_q.append(fk_q[i, fi])
+                    labels.append((i, name))
+            if not labels:
+                return False
+            position_error = torch.linalg.vector_norm(
+                torch.stack(actual_p) - torch.stack(requested_p), dim=-1
+            )
+            rotation_error = angular_distance_axis_angle(
+                torch.stack(requested_q), torch.stack(actual_q)
+            ).reshape(-1)
+            errors = torch.stack((position_error, rotation_error), dim=-1).detach().cpu().tolist()
+            for (i, name), (pos_err, ori_err) in zip(labels, errors):
+                if (not math.isfinite(pos_err) or not math.isfinite(ori_err)
+                        or pos_err > pos_tol or ori_err > ori_tol):
+                    log_warn(
+                        f"Cartesian waypoint {i} frame {name} missed pose: "
+                        f"position {pos_err:.4f} m (limit {pos_tol:.4f}), "
+                        f"orientation {ori_err:.4f} rad (limit {ori_tol:.4f})"
                     )
-                    if (
-                        not math.isfinite(pos_err)
-                        or not math.isfinite(ori_err)
-                        or pos_err > pos_tol
-                        or ori_err > ori_tol
-                    ):
-                        log_warn(
-                            f"Cartesian waypoint {i} frame {name} missed pose: "
-                            f"position {pos_err:.4f} m (limit {pos_tol:.4f}), "
-                            f"orientation {ori_err:.4f} rad (limit {ori_tol:.4f})"
-                        )
-                        return False
+                    return False
         except Exception as exc:
             log_warn(f"Waypoint pose check failed: {exc!r}")
             return False

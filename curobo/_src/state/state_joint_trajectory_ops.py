@@ -6,16 +6,97 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Optional, Union
+from math import isfinite
+from typing import TYPE_CHECKING, List, Mapping, Optional, Sequence, Union
 
 import torch
 
+from curobo._src.types.control_space import ControlSpace
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.tensor_util import clone_if_not_none
 
 from .state_joint_jit_helpers import trim_trajectory_jit
 
 if TYPE_CHECKING:
     from .state_joint import JointState
+
+
+def expand_joint_trajectory(
+    trajectory: "JointState",
+    held_positions: Mapping[str, float],
+    joint_names: Sequence[str],
+) -> "JointState":
+    """Export a trajectory with additional joints held at supplied positions.
+
+    Args:
+        trajectory: Optimized state with tensors shaped (..., horizon, active_dof).
+        held_positions: Measured or predicted positions for every added joint.
+        joint_names: Unique output order containing all optimized joints.
+
+    Returns:
+        New state shaped (..., horizon, len(joint_names)) on the original device
+        and dtype. Added joints have zero derivatives; absent derivatives stay
+        absent. Inputs and optimization degrees of freedom are unchanged.
+    """
+    from .state_joint import JointState
+
+    output_names = list(joint_names)
+    active_names = trajectory.joint_names
+    if active_names is None or trajectory.position.ndim < 2:
+        log_and_raise("A trajectory with joint names and a horizon dimension is required")
+    if len(active_names) != trajectory.position.shape[-1]:
+        log_and_raise("Trajectory joint names do not match its tensor width")
+    if len(set(active_names)) != len(active_names):
+        log_and_raise("Trajectory joint names must be unique")
+    if not output_names or len(set(output_names)) != len(output_names):
+        log_and_raise("Output joint names must be nonempty and unique")
+    missing_active = set(active_names).difference(output_names)
+    if missing_active:
+        log_and_raise(f"Output joint names omit optimized joints: {sorted(missing_active)}")
+
+    active_set = set(active_names)
+    held_values = []
+    for name in output_names:
+        if name in active_set:
+            held_values.append(0.0)
+        else:
+            if name not in held_positions or not isfinite(held_positions[name]):
+                log_and_raise(f"A finite held position is required for joint {name!r}")
+            held_values.append(held_positions[name])
+    active_indices = [output_names.index(name) for name in active_names]
+
+    def expand(
+        values: Optional[torch.Tensor], hold_position: bool = False
+    ) -> Optional[torch.Tensor]:
+        if values is None:
+            return None
+        if values.shape[-1] != len(active_names):
+            log_and_raise("Trajectory tensors must have the same joint width")
+        shape = (*values.shape[:-1], len(output_names))
+        if hold_position:
+            expanded = values.new_tensor(held_values).expand(shape).clone()
+        else:
+            expanded = values.new_zeros(shape)
+        indices = torch.as_tensor(active_indices, device=values.device, dtype=torch.long)
+        return expanded.index_copy_(-1, indices, values)
+
+    position_knots = (
+        trajectory.control_space is None
+        or trajectory.control_space in ControlSpace.position_types()
+    )
+    return JointState(
+        position=expand(trajectory.position, hold_position=True),
+        velocity=expand(trajectory.velocity),
+        acceleration=expand(trajectory.acceleration),
+        jerk=expand(trajectory.jerk),
+        joint_names=output_names,
+        device_cfg=trajectory.device_cfg,
+        dt=clone_if_not_none(trajectory.dt),
+        aux_data=trajectory.aux_data.copy(),
+        knot=expand(trajectory.knot, hold_position=position_knots),
+        knot_dt=clone_if_not_none(trajectory.knot_dt),
+        control_space=trajectory.control_space,
+    )
 
 
 def gather_joint_state_by_seed(joint_state: "JointState", idx: torch.Tensor) -> "JointState":

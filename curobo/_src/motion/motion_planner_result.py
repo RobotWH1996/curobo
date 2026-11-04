@@ -40,6 +40,8 @@ class WaypointPlanResult:
     planning_time: float = 0.0
     #: TrajOpt/IK result of the failed segment, if any (None means IK returned None).
     failed_result: Optional[object] = None
+    #: Exact times of ordered goals on a single-optimization output, including the final goal.
+    waypoint_times: Optional[list[float]] = None
 
 
 @dataclass

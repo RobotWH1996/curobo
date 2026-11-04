@@ -48,7 +48,7 @@ robot_cfg:
     - right_gripper_left_jaw
     - left_arm_ee_link
     - right_arm_ee_link
-    # 每个碰撞球再加的半径（米）。YAML 里 radius 为 0 的球实际按 0.002 m 碰撞。
+    # 每个碰撞球再加的半径（米）。零半径仍会被 buffer 激活；空 TCP 占位球用负半径禁用。
     collision_sphere_buffer: 0.001
     # 各连杆碰撞球。center 是连杆坐标系 xyz（米），radius 是半径（米）。
     collision_spheres:
@@ -949,13 +949,13 @@ robot_cfg:
         - 0.0
         - 0.0
         - 0.0
-        radius: 0.0
+        radius: -1.0 # Empty TCP frame: disabled placeholder; zero becomes a collision sphere after buffer.
       right_arm_ee_link:
       - center:
         - 0.0
         - 0.0
         - 0.0
-        radius: 0.0
+        radius: -1.0 # Empty TCP frame: disabled placeholder; zero becomes a collision sphere after buffer.
     # 关节空间。按关节排的列表顺序都是 joint_names：左臂 7、右臂 7、小腿、大腿、腰、胸、脖子、头、左夹爪、右夹爪。
     cspace:
       # 22 个关节的顺序。后面按关节排的列表都跟这个对齐。加载后活动关节会按运动学树重排。

@@ -21,9 +21,11 @@ from curobo._src.solver.solver_trajopt_cfg import (
 from curobo._src.solver.solver_trajopt_result import (
     TrajOptSolverResult as TrajectoryOptimizerResult,
 )
+from curobo._src.state.state_joint_trajectory_ops import expand_joint_trajectory
 
 __all__ = [
     "TrajectoryOptimizer",
     "TrajectoryOptimizerCfg",
     "TrajectoryOptimizerResult",
+    "expand_joint_trajectory",
 ]

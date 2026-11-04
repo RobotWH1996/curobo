@@ -11,6 +11,7 @@ of the forward kinematics function.
 from __future__ import annotations
 
 # Standard Library
+import math
 from typing import List, Optional, Union
 
 import torch
@@ -65,6 +66,10 @@ class Kinematics:
         self.compute_com = compute_com
         self._batch = 0
         self._horizon = 0
+        self._collision_phase = None
+        self._collision_phase_indices = ()
+        self._collision_phase_masks = {}
+        self._collision_phase_lengths = None
         self.update_batch_size(1, 1, reset_buffers=True)
 
     @property
@@ -97,6 +102,51 @@ class Kinematics:
             self._buffers["idxs_env"] = torch.zeros(
                 (batch,), dtype=torch.int32, device=self.device_cfg.device
             )
+        key = (batch, horizon)
+        if key not in self._collision_phase_masks:
+            self._collision_phase_masks[key] = torch.zeros(
+                (batch, horizon, self.total_spheres), dtype=torch.bool, device=self.device_cfg.device
+            )
+            self._write_collision_phase(key)
+
+    def set_collision_phase(self, sphere_indices: List[int], start_fraction: Optional[float]) -> None:
+        """Disable selected spheres after a trajectory phase, retaining graph buffers.
+
+        Single-state queries stay unchanged. Pass None to restore normal collision
+        geometry. Existing masks are updated in place for CUDA graph replay.
+        """
+        if start_fraction is not None and (
+            not math.isfinite(start_fraction) or not 0.0 <= start_fraction <= 1.0
+        ):
+            log_and_raise("Collision phase fraction must be in [0, 1]")
+        if any(i < 0 or i >= self.total_spheres for i in sphere_indices):
+            log_and_raise("Collision phase sphere index out of range")
+        self._collision_phase = start_fraction
+        self._collision_phase_indices = tuple(sphere_indices)
+        for key in self._collision_phase_masks:
+            self._write_collision_phase(key)
+
+    def set_collision_horizon(self, lengths: Optional[torch.Tensor]) -> None:
+        """Use valid per-seed lengths rather than interpolation buffer capacity."""
+        self._collision_phase_lengths = lengths
+        if self._collision_phase is not None:
+            for key in self._collision_phase_masks:
+                self._write_collision_phase(key)
+
+    def _write_collision_phase(self, key: tuple[int, int]) -> None:
+        """Fill a captured mask in place for the valid trajectory lengths."""
+        batch, horizon = key
+        mask = self._collision_phase_masks[key]
+        mask.zero_()
+        if horizon > 1 and self._collision_phase is not None and self._collision_phase_indices:
+            lengths = self._collision_phase_lengths
+            if lengths is None or lengths.numel() not in (1, batch):
+                lengths = torch.full((batch, 1), horizon, device=mask.device)
+            else:
+                lengths = lengths.to(device=mask.device).reshape(-1, 1)
+            steps = torch.arange(horizon, device=mask.device).reshape(1, -1)
+            disabled = steps > (lengths - 1) * self._collision_phase
+            mask[:, :, list(self._collision_phase_indices)] = disabled.unsqueeze(-1)
 
     @profiler.record_function("cuda_robot_model/forward_kinematics")
     def _forward(
@@ -156,6 +206,12 @@ class Kinematics:
                 horizon,
             )
         )
+        # This operation is always present during graph capture; phase changes
+        # update only the persistent boolean mask, never Python graph structure.
+        radius = torch.where(
+            self._collision_phase_masks[(batch, horizon)], -100.0, robot_spheres[..., 3]
+        )
+        robot_spheres = torch.cat((robot_spheres[..., :3], radius.unsqueeze(-1)), dim=-1)
         link_poses = ToolPose(
             tool_frames=self.tool_frames,
             position=link_position,

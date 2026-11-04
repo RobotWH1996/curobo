@@ -491,12 +491,17 @@ class TrajOptSolver:
         interpolated_rollout = self.additional_metrics_rollouts["interpolated_rollout"]
 
         interpolated_js, last_tstep, buffer_updated = self.get_interpolated_trajectory(js_optimized)
-        interpolated_robot_state = interpolated_rollout.transition_model.compute_augmented_state(
-            interpolated_js
-        )
-        interpolated_metrics = interpolated_rollout.compute_metrics_from_state(
-            interpolated_robot_state
-        )
+        phase_model = interpolated_rollout.transition_model.robot_model
+        phase_model.set_collision_horizon(last_tstep)
+        try:
+            interpolated_robot_state = interpolated_rollout.transition_model.compute_augmented_state(
+                interpolated_js
+            )
+            interpolated_metrics = interpolated_rollout.compute_metrics_from_state(
+                interpolated_robot_state
+            )
+        finally:
+            phase_model.set_collision_horizon(None)
         interpolated_trajectory = interpolated_js.view(
             batch_size, num_seeds, interpolated_js.shape[-2], self.action_dim
         )
