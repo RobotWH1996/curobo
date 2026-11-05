@@ -90,7 +90,15 @@ class Kinematics:
         """
         if batch == 0 or horizon == 0:
             log_and_raise("batch and horizon must be > 0")
-        if self._batch != batch or self._horizon != horizon or reset_buffers:
+        # Sphere edits replace link_spheres without rewriting the stored count.
+        # FK buffers follow the live tensor; the phase mask must do the same.
+        live_spheres = self.config.kinematics_config.num_spheres
+        if self.config.kinematics_config.total_spheres != live_spheres:
+            self.config.kinematics_config.total_spheres = live_spheres
+        key = (batch, horizon)
+        mask = self._collision_phase_masks.get(key)
+        count_changed = mask is not None and mask.shape[-1] != live_spheres
+        if self._batch != batch or self._horizon != horizon or reset_buffers or count_changed:
             self._batch = batch
             self._horizon = horizon
             self._buffers = KinematicsFusedFunction.create_buffers(
@@ -102,10 +110,11 @@ class Kinematics:
             self._buffers["idxs_env"] = torch.zeros(
                 (batch,), dtype=torch.int32, device=self.device_cfg.device
             )
-        key = (batch, horizon)
-        if key not in self._collision_phase_masks:
+        if mask is None or mask.shape != (batch, horizon, live_spheres):
+            # A captured graph keeps its mask pointer. Reallocate only when the
+            # sphere count itself changes, which already invalidates that graph.
             self._collision_phase_masks[key] = torch.zeros(
-                (batch, horizon, self.total_spheres), dtype=torch.bool, device=self.device_cfg.device
+                (batch, horizon, live_spheres), dtype=torch.bool, device=self.device_cfg.device
             )
             self._write_collision_phase(key)
 
@@ -138,7 +147,8 @@ class Kinematics:
         batch, horizon = key
         mask = self._collision_phase_masks[key]
         mask.zero_()
-        if horizon > 1 and self._collision_phase is not None and self._collision_phase_indices:
+        indices = [i for i in self._collision_phase_indices if 0 <= i < mask.shape[-1]]
+        if horizon > 1 and self._collision_phase is not None and indices:
             lengths = self._collision_phase_lengths
             if lengths is None or lengths.numel() not in (1, batch):
                 lengths = torch.full((batch, 1), horizon, device=mask.device)
@@ -146,7 +156,7 @@ class Kinematics:
                 lengths = lengths.to(device=mask.device).reshape(-1, 1)
             steps = torch.arange(horizon, device=mask.device).reshape(1, -1)
             disabled = steps > (lengths - 1) * self._collision_phase
-            mask[:, :, list(self._collision_phase_indices)] = disabled.unsqueeze(-1)
+            mask[:, :, indices] = disabled.unsqueeze(-1)
 
     @profiler.record_function("cuda_robot_model/forward_kinematics")
     def _forward(

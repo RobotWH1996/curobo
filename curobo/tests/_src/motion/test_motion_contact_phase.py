@@ -56,6 +56,26 @@ def test_pairwise_quaternion_angles() -> None:
     torch.testing.assert_close(angular_distance_axis_angle(identity, -current), angle)
 
 
+def test_collision_mask_follows_edited_sphere_count() -> None:
+    model = Kinematics(KinematicsCfg.from_robot_yaml_file('lycus.yml'))
+    state = model.default_joint_state
+    before = model.compute_kinematics(state).robot_spheres.shape[-2]
+    pointer = model._collision_phase_masks[(1, 1)].data_ptr()
+    model.update_batch_size(1, 1, reset_buffers=True)
+    assert model._collision_phase_masks[(1, 1)].data_ptr() == pointer
+    kc = model.config.kinematics_config
+    kc.link_spheres = torch.cat((kc.link_spheres, kc.link_spheres[:, :1, :]), dim=1).contiguous()
+    kc.link_sphere_idx_map = torch.cat((kc.link_sphere_idx_map, kc.link_sphere_idx_map[:1])).contiguous()
+    model.update_batch_size(1, 1, reset_buffers=True)
+    after = model.compute_kinematics(state).robot_spheres
+    assert after.shape[-2] == before + 1
+    assert model._collision_phase_masks[(1, 1)].shape[-1] == before + 1
+    kc.link_spheres = kc.link_spheres[:, :-1, :].contiguous()
+    kc.link_sphere_idx_map = kc.link_sphere_idx_map[:-1].contiguous()
+    model.update_batch_size(1, 1, reset_buffers=True)
+    assert model.compute_kinematics(state).robot_spheres.shape[-2] == before
+
+
 def test_contact_phase_uses_each_valid_length() -> None:
     model = Kinematics(KinematicsCfg.from_robot_yaml_file('lycus.yml'))
     q = model.default_joint_position.reshape(1, 1, -1).repeat(2, 9, 1)
