@@ -1064,6 +1064,7 @@ class MotionPlanner:
             if waypoint_weight_scale != 1.0:
                 for cost in self._cspace_costs():
                     cost._via_weight.mul_(waypoint_weight_scale)
+            self._timing_add("attempts", 1.0)
             result = self.trajopt_solver.solve_cspace(
                 active_goals[-1],
                 q,
@@ -1673,6 +1674,7 @@ class MotionPlanner:
         num_seeds = self.trajopt_solver.config.num_seeds
 
         for current_attempt in range(max_attempts):
+            self._timing_add("attempts", 1.0)
             current_state = og_current_state.clone()
             t_ik = time.perf_counter()
             ik_result = self.ik_solver.solve_pose(
@@ -1747,6 +1749,7 @@ class MotionPlanner:
         trajopt_result = None
         total_time = 0.0
         for _ in range(max_attempts):
+            self._timing_add("attempts", 1.0)
             t_ik = time.perf_counter()
             ik_result = self.ik_solver.solve_pose(
                 goal_tool_poses,
@@ -1829,6 +1832,7 @@ class MotionPlanner:
         num_seeds = self.trajopt_solver.config.num_seeds
 
         for current_attempt in range(max_attempts):
+            self._timing_add("attempts", 1.0)
             current_state = og_current_state.clone()
             seed_traj = None
             finetune_dt_scale = 0.75
