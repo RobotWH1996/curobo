@@ -25,6 +25,7 @@ class RolloutRuntime final {
   RolloutRuntime(const RolloutRuntime&) = delete;
   RolloutRuntime& operator=(const RolloutRuntime&) = delete;
 
+  void update_fixed_transforms(const std::vector<float> &transforms);
   int num_links() const { return manifest_.num_links; }
   int cache_floats_per_link() const {
     return manifest_.forward_profiles.empty() ? profile_.cache_floats_per_link : 32;
@@ -52,6 +53,8 @@ class RolloutRuntime final {
 
   std::string artifact_directory_;
   std::vector<std::string> link_names_;
+  std::vector<int16_t> full_parents_;
+  std::vector<int8_t> full_joint_types_;
   curobo_robot_runtime::RolloutManifest manifest_;
   curobo_robot_runtime::RolloutKernelProfile profile_;
   std::vector<float> original_masses_com_;

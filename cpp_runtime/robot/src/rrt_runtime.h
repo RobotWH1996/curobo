@@ -29,6 +29,7 @@ class RrtRuntime final {
   RrtRuntime(const RrtRuntime&) = delete;
   RrtRuntime& operator=(const RrtRuntime&) = delete;
 
+  void update_fixed_transforms(const std::vector<float> &transforms);
   CuroboRobotInfo robot_info() const;
   RrtInfo info() const;
   const RrtConfig& config() const { return config_; }

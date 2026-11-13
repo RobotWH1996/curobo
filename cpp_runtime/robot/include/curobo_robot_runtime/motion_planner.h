@@ -323,6 +323,10 @@ class MotionPlanner final {
   MotionPlanner(MotionPlanner&& other) noexcept;
   MotionPlanner& operator=(MotionPlanner&& other) noexcept;
 
+  /** Update packed row-major fixed transforms in place, preserving captured CUDA addresses. */
+  void set_tool_upright(const std::vector<float> &weights, const std::vector<float> &signs);
+  void update_fixed_transforms(const std::vector<float> &transforms);
+
   CuroboRobotInfo robot_info() const;
   MotionPlanningInfo info() const;
   /** Query the fixed native state count from the exported spline layout. */

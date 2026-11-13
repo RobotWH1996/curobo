@@ -31,6 +31,8 @@ class TrajectoryOptimizerRuntime final {
   TrajectoryOptimizerRuntime(const TrajectoryOptimizerRuntime&) = delete;
   TrajectoryOptimizerRuntime& operator=(const TrajectoryOptimizerRuntime&) = delete;
 
+  void set_tool_upright(const std::vector<float> &weights, const std::vector<float> &signs);
+  void update_fixed_transforms(const std::vector<float> &transforms);
   CuroboRobotInfo robot_info() const;
   TrajectoryOptimizationInfo info() const;
   const TrajectoryOptimizationConfig& config() const { return config_; }
@@ -276,6 +278,7 @@ class TrajectoryOptimizerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer pose_rotation_metric_;
   mutable curobo_robot_runtime::DeviceBuffer pose_tolerance_;
   mutable curobo_robot_runtime::DeviceBuffer pose_error_frame_;
+  curobo_robot_runtime::DeviceBuffer upright_settings_;
   mutable curobo_robot_runtime::DeviceBuffer pose_cost_;
   mutable curobo_robot_runtime::DeviceBuffer pose_position_distance_;
   mutable curobo_robot_runtime::DeviceBuffer pose_orientation_distance_;

@@ -421,6 +421,8 @@ class DeviceBuffer {
   size_t bytes_{0};
 };
 
+void update_fixed_transform_buffer(DeviceBuffer &buffer, const std::vector<float> &transforms);
+
 class KernelModule {
  public:
   KernelModule() = default;
@@ -447,6 +449,7 @@ class RobotRuntimeImpl {
   CuroboRobotInfo info() const;
   const std::string& joint_name(int index) const;
   const std::string& tool_frame_name(int index) const;
+  void update_fixed_transforms(const std::vector<float> &transforms);
   void compute_kinematics(const CuroboRobotKinematicsRequest& request) const;
 
   struct ModelDeviceView {

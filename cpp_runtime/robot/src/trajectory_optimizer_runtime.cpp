@@ -8,6 +8,7 @@
 #include "rollout_runtime.h"
 #include "rollout_streams.h"
 #include "scene_runtime.h"
+#include "tool_constraint_cuda.h"
 #include "trajectory_timeopt_cuda.h"
 #include "trajectory_waypoints_cuda.h"
 #include "warp_abi.h"
@@ -252,6 +253,15 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
     throw std::runtime_error(
         "TrajOpt effort limits require a robot rollout artifact");
   }
+  if (config_.interpolation_dt < 0.F || !std::isfinite(config_.interpolation_dt))
+    throw std::invalid_argument("invalid dense interpolation period");
+  if (config_.interpolation_dt > 0.F) {
+    manifest_.minimum_interpolation_buffer_size =
+        static_cast<int>(std::ceil((manifest_.minimum_interpolation_buffer_size - 1) *
+                                   manifest_.interpolation_dt / config_.interpolation_dt)) +
+        1;
+    manifest_.interpolation_dt = config_.interpolation_dt;
+  }
   validate_config();
   validate_scene();
   collision_ = std::move(collision);
@@ -295,6 +305,28 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
 TrajectoryOptimizerRuntime::~TrajectoryOptimizerRuntime() {
   cudaSetDevice(config_.device_ordinal);
   if (conditional_stream_ != nullptr) cudaStreamDestroy(conditional_stream_);
+}
+
+void TrajectoryOptimizerRuntime::set_tool_upright(const std::vector<float> &weights,
+                                                  const std::vector<float> &signs) {
+  if (weights.size() != static_cast<size_t>(manifest_.num_tool_frames) ||
+      signs.size() != weights.size())
+    throw std::invalid_argument("upright settings must match exported tool frames");
+  std::vector<float> settings;
+  for (size_t i = 0; i < weights.size(); ++i) {
+    if (!std::isfinite(weights[i]) || weights[i] < 0 || !std::isfinite(signs[i]) ||
+        std::abs(signs[i]) != 1.F)
+      throw std::invalid_argument("invalid upright tool weight or sign");
+    settings.insert(settings.end(), {weights[i], signs[i]});
+  }
+  CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
+  CRR_CUDA_CHECK(cudaMemcpy(reinterpret_cast<void *>(upright_settings_.ptr()), settings.data(),
+                            settings.size() * sizeof(float), cudaMemcpyHostToDevice));
+}
+
+void TrajectoryOptimizerRuntime::update_fixed_transforms(const std::vector<float> &transforms) {
+  robot_.update_fixed_transforms(transforms);
+  if (rollout_) rollout_->update_fixed_transforms(transforms);
 }
 
 CuroboRobotInfo TrajectoryOptimizerRuntime::robot_info() const {
@@ -350,9 +382,9 @@ void TrajectoryOptimizerRuntime::set_link_collision_enabled(
 }
 
 void TrajectoryOptimizerRuntime::validate_config() const {
-  if (config_.num_knots < 12 || config_.num_knots > 1024 ||
+  if (config_.num_knots < 6 || config_.num_knots > 1024 ||
       config_.num_knots != manifest_.spline_layout.num_knots) {
-    throw std::invalid_argument("num_knots must be in [12,1024] and match the exported artifact");
+    throw std::invalid_argument("num_knots must be in [6,1024] and match the exported artifact");
   }
   const auto robot_info_value = robot_.info();
   if (manifest_.arch != robot_.manifest().arch ||
@@ -724,6 +756,8 @@ void TrajectoryOptimizerRuntime::allocate_workspace() {
   allocate_float(&pose_tolerance_, 2 * manifest_.num_tool_frames * 2);
   pose_error_frame_.allocate(
       static_cast<size_t>(manifest_.num_tool_frames) * sizeof(int32_t));
+  allocate_float(&upright_settings_, manifest_.num_tool_frames * 2);
+  upright_settings_.clear();
   allocate_float(&pose_cost_, state_tools * 2);
   allocate_float(&pose_position_distance_, state_tools);
   allocate_float(&pose_orientation_distance_, state_tools);
@@ -1195,10 +1229,8 @@ void TrajectoryOptimizerRuntime::launch_pose(
   int states = trajectories * manifest_.trajectory_steps;
   const int state_tools = states * manifest_.num_tool_frames;
   if (!prepare_pose_criteria_ && !request.constrain_tool_path) {
-    CRR_CUDA_CHECK(cudaMemsetAsync(
-        reinterpret_cast<void*>(pose_cost_.ptr()), 0,
-        static_cast<size_t>(state_tools) * 2 * sizeof(float),
-        reinterpret_cast<cudaStream_t>(stream)));
+    for (auto *output : {&pose_cost_, &pose_position_gradient_, &pose_quaternion_gradient_})
+      output->clear(reinterpret_cast<cudaStream_t>(stream));
     return;
   }
   if (!prepare_pose_criteria_) {
@@ -1507,12 +1539,8 @@ void TrajectoryOptimizerRuntime::launch_kinematics_backward(
   const int states = trajectories * manifest_.trajectory_steps;
   auto model = robot_.model_device_view();
   CUdeviceptr output = collision_joint_gradient_.ptr();
-  CUdeviceptr position_gradient = (prepare_pose_criteria_ || request.constrain_tool_path)
-                                      ? pose_position_gradient_.ptr()
-                                      : zero_link_position_gradient_.ptr();
-  CUdeviceptr quaternion_gradient = (prepare_pose_criteria_ || request.constrain_tool_path)
-                                        ? pose_quaternion_gradient_.ptr()
-                                        : zero_link_quaternion_gradient_.ptr();
+  CUdeviceptr position_gradient = pose_position_gradient_.ptr();
+  CUdeviceptr quaternion_gradient = pose_quaternion_gradient_.ptr();
   CUdeviceptr sphere_gradient = world_collision_gradient_.ptr();
   CUdeviceptr sphere_gradient_addend = self_collision_gradient_.ptr();
   CUdeviceptr null_pointer = 0;
@@ -1816,6 +1844,15 @@ void TrajectoryOptimizerRuntime::evaluate(
     wait(cost_stream, RolloutEvent::KINEMATICS_READY);
   }
   launch_pose(trajectories, request, driver(RolloutStream::POSE));
+  CRR_CUDA_CHECK(launch_tool_upright(reinterpret_cast<const float *>(link_position_.ptr()),
+                                     reinterpret_cast<const float *>(link_quaternion_.ptr()),
+                                     reinterpret_cast<const float *>(upright_settings_.ptr()),
+                                     reinterpret_cast<float *>(pose_cost_.ptr()),
+                                     reinterpret_cast<float *>(pose_position_gradient_.ptr()),
+                                     reinterpret_cast<float *>(pose_quaternion_gradient_.ptr()),
+                                     trajectories, manifest_.trajectory_steps,
+                                     manifest_.num_tool_frames,
+                                     reinterpret_cast<cudaStream_t>(driver(RolloutStream::POSE))));
   record(RolloutEvent::POSE_DONE, pose);
   launch_world_collision(trajectories, driver(RolloutStream::WORLD));
   record(RolloutEvent::WORLD_DONE, world);

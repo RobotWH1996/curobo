@@ -66,6 +66,15 @@ const char* name_or_error(CuroboRobotRuntime* runtime, int index, bool tool_fram
 
 extern "C" {
 
+int curobo_robot_update_fixed_transforms(CuroboRobotRuntime *runtime, const float *transforms,
+                                         int count) {
+  return wrap([&] {
+    if (transforms == nullptr || count <= 0)
+      throw std::invalid_argument("invalid fixed transforms");
+    checked(runtime).update_fixed_transforms(std::vector<float>(transforms, transforms + count));
+  });
+}
+
 const char* curobo_robot_last_error(void) { return g_last_error.c_str(); }
 
 int curobo_robot_create(const char* artifact_dir, int device_ordinal,

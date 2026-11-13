@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <vector>
 
 #include <cuda_runtime_api.h>
 #include <array>
 #include <memory>
+#include <vector>
 #include "curobo_robot_runtime/trajectory_optimization.h"
 
 namespace curobo::robot {
@@ -77,6 +79,9 @@ class MpcController final {
   MpcController(const MpcController &) = delete;
   MpcController &operator=(const MpcController &) = delete;
 
+  /** Update packed row-major fixed transforms in place, preserving captured CUDA addresses. */
+  void update_fixed_transforms(const std::vector<float> &transforms);
+
   TrajectoryOptimizationInfo info() const;
   /**
    * Latch the planner's uniform sample dt (not knot spacing) at phase entry.
@@ -121,6 +126,9 @@ class MpcController final {
                  const float *jerk, int executed_knots, cudaStream_t stream = nullptr);
   /** Commit the latest feasible proposal after admission/ACK, before the next step. */
   void accept(cudaStream_t stream = nullptr);
+  void set_iterations(int iterations);
+  void set_joint_tracking(const std::vector<float> &reference,
+                          const std::vector<float> &dof_weights, float weight);
   /**
    * Check execution-spline samples [trajectory_steps,dof] without optimizing.
    * Uses swept world collision, self collision and q/v/a/jerk bounds. Sampling

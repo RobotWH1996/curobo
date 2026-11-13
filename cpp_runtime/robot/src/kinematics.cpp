@@ -28,6 +28,12 @@ Kinematics::Kinematics(const std::string& artifact_directory, int device_ordinal
   throw_on_error(curobo_robot_create(artifact_directory.c_str(), device_ordinal, &runtime_));
 }
 
+void Kinematics::update_fixed_transforms(const std::vector<float> &transforms) {
+  if (curobo_robot_update_fixed_transforms(runtime_, transforms.data(),
+                                           static_cast<int>(transforms.size())) != 0)
+    throw std::runtime_error(curobo_robot_last_error());
+}
+
 Kinematics::~Kinematics() { curobo_robot_destroy(runtime_); }
 
 Kinematics::Kinematics(Kinematics&& other) noexcept : runtime_(other.runtime_) {

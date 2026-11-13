@@ -50,11 +50,13 @@ struct TrajectoryOptimizationConfig {
   float execution_speed_scale{1.0F};
   /** Initial iterations between native/dense success checks. */
   int initial_check_interval{50};
-  /** Fixed spatial control count in [12,1024]; must match the exported artifact.
+  /** Fixed spatial control count in [6,1024]; must match the exported artifact.
    * More knots generally increase motion duration and may increase planning time,
    * but can reduce waypoint tracking error. Choose the count based on the required
    * waypoint tracking tolerance and obstacle density. */
   int num_knots{16};
+  /** Optional output/dense sampling period; zero uses the artifact value. */
+  float interpolation_dt{0.F};
 };
 
 /** Borrowed executable trajectory for the selected timeopt seed.

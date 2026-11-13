@@ -29,6 +29,15 @@ MotionPlanner::MotionPlanner(const std::string& artifact_directory,
     : runtime_(std::make_unique<detail::MotionPlannerRuntime>(
           artifact_directory, config, scene)) {}
 
+void MotionPlanner::set_tool_upright(const std::vector<float> &weights,
+                                     const std::vector<float> &signs) {
+  runtime_->set_tool_upright(weights, signs);
+}
+
+void MotionPlanner::update_fixed_transforms(const std::vector<float> &transforms) {
+  runtime_->update_fixed_transforms(transforms);
+}
+
 MotionPlanner::~MotionPlanner() = default;
 
 MotionPlanner::MotionPlanner(MotionPlanner&& other) noexcept = default;

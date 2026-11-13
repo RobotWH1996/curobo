@@ -243,6 +243,18 @@ void MotionPlannerRuntime::set_collision_mask(uint32_t layers) {
   CRR_CUDA_CHECK(cudaStreamSynchronize(nullptr));
 }
 
+void MotionPlannerRuntime::set_tool_upright(const std::vector<float> &weights,
+                                            const std::vector<float> &signs) {
+  trajectory_optimizer_->set_tool_upright(weights, signs);
+}
+
+void MotionPlannerRuntime::update_fixed_transforms(const std::vector<float> &transforms) {
+  inverse_kinematics_->update_fixed_transforms(transforms);
+  if (grasp_inverse_kinematics_) grasp_inverse_kinematics_->update_fixed_transforms(transforms);
+  rrt_->update_fixed_transforms(transforms);
+  trajectory_optimizer_->update_fixed_transforms(transforms);
+}
+
 void MotionPlannerRuntime::update_link_inertial(
     const LinkInertialUpdate& update) {
   update_links_inertial({update});

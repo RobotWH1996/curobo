@@ -64,6 +64,7 @@ add_library(curobo_robot_runtime SHARED
   src/trajectory_timeopt.cpp
   src/trajectory_timeopt_cuda.cu
   src/trajectory_waypoints_cuda.cu
+  src/tool_constraint_cuda.cu
 )
 
 set_source_files_properties(src/trajectory_seed_fitter_cuda.cu src/trajectory_timeopt_cuda.cu PROPERTIES

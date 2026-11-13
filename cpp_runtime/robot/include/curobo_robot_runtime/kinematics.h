@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <vector>
 
 #include <cuda_runtime_api.h>
 
@@ -20,6 +21,9 @@ class Kinematics final {
   Kinematics& operator=(const Kinematics&) = delete;
   Kinematics(Kinematics&& other) noexcept;
   Kinematics& operator=(Kinematics&& other) noexcept;
+
+  /** Update packed row-major fixed transforms in place, preserving captured CUDA addresses. */
+  void update_fixed_transforms(const std::vector<float> &transforms);
 
   CuroboRobotInfo info() const;
   std::string joint_name(int joint_index) const;

@@ -28,6 +28,8 @@ class MotionPlannerRuntime final {
   MotionPlannerRuntime(const MotionPlannerRuntime&) = delete;
   MotionPlannerRuntime& operator=(const MotionPlannerRuntime&) = delete;
 
+  void set_tool_upright(const std::vector<float> &weights, const std::vector<float> &signs);
+  void update_fixed_transforms(const std::vector<float> &transforms);
   CuroboRobotInfo robot_info() const;
   MotionPlanningInfo info() const;
   const MotionPlanningConfig& config() const { return config_; }

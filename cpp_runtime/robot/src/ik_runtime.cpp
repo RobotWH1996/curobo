@@ -324,6 +324,11 @@ IkRuntime::~IkRuntime() {
   }
 }
 
+void IkRuntime::update_fixed_transforms(const std::vector<float> &transforms) {
+  model_->robot_.update_fixed_transforms(transforms);
+  if (model_->rollout_) model_->rollout_->update_fixed_transforms(transforms);
+}
+
 CuroboRobotInfo IkRuntime::info() const { return model_->robot_.info(); }
 
 int IkRuntime::attachment_sphere_capacity(

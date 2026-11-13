@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <vector>
 
 #include <cuda_runtime_api.h>
 
@@ -132,6 +133,9 @@ class InverseKinematics final {
   InverseKinematics& operator=(const InverseKinematics&) = delete;
   InverseKinematics(InverseKinematics&& other) noexcept;
   InverseKinematics& operator=(InverseKinematics&& other) noexcept;
+
+  /** Update packed row-major fixed transforms in place, preserving captured CUDA addresses. */
+  void update_fixed_transforms(const std::vector<float> &transforms);
 
   CuroboRobotInfo info() const;
   const InverseKinematicsConfig& config() const;

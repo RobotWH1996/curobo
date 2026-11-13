@@ -50,6 +50,10 @@ typedef struct CuroboRobotKinematicsRequest {
   int horizon;
 } CuroboRobotKinematicsRequest;
 
+/** Replace fixed transforms with packed CUDA float32 model data in host memory. */
+CUROBO_ROBOT_API int curobo_robot_update_fixed_transforms(CuroboRobotRuntime *runtime,
+                                                          const float *transforms, int count);
+
 /** Return the calling thread's most recent runtime error. */
 CUROBO_ROBOT_API const char* curobo_robot_last_error(void);
 

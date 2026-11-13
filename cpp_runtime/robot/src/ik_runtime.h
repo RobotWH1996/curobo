@@ -34,6 +34,7 @@ class IkRuntime final {
   IkRuntime& operator=(const IkRuntime&) = delete;
 
   CuroboRobotInfo info() const;
+  void update_fixed_transforms(const std::vector<float> &transforms);
   const InverseKinematicsConfig& config() const { return config_; }
   int attachment_sphere_capacity(const std::string& link_name) const;
   void attach_object(const SphereAttachment& attachment);

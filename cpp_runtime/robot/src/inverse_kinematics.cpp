@@ -14,6 +14,10 @@ InverseKinematics::InverseKinematics(
     : runtime_(
           std::make_unique<detail::IkRuntime>(artifact_directory, config, scene)) {}
 
+void InverseKinematics::update_fixed_transforms(const std::vector<float> &transforms) {
+  runtime_->update_fixed_transforms(transforms);
+}
+
 InverseKinematics::~InverseKinematics() = default;
 
 InverseKinematics::InverseKinematics(

@@ -200,6 +200,14 @@ RolloutRuntime::RolloutRuntime(std::string artifact_directory,
       link_names_.size() != static_cast<size_t>(manifest_.num_original_links)) {
     throw std::runtime_error("rollout and robot link dimensions do not match");
   }
+  full_parents_ =
+      decode<int16_t>(curobo_robot_runtime::load_tensor_data(
+                          artifact_directory_, robot_manifest.link_map, "full link_map"),
+                      "full link_map");
+  full_joint_types_ =
+      decode<int8_t>(curobo_robot_runtime::load_tensor_data(
+                         artifact_directory_, robot_manifest.joint_map_type, "full joint_map_type"),
+                     "full joint_map_type");
   switch (profile) {
     case RolloutProfile::IK:
       profile_ = manifest_.ik;
@@ -354,6 +362,73 @@ void RolloutRuntime::launch_inverse_dynamics_backward(
       static_cast<unsigned int>(profile_.backward.block_dim),
       static_cast<unsigned int>(profile_.backward.shared_memory), stream,
       arguments);
+}
+
+void RolloutRuntime::update_fixed_transforms(const std::vector<float> &transforms) {
+  const size_t count = static_cast<size_t>(manifest_.num_original_links);
+  if (transforms.size() != count * 12 || !finite_values(transforms.data(), transforms.size()))
+    throw std::invalid_argument("full fixed transform layout differs from dynamics source tree");
+  using Pose = std::array<float, 12>;
+  const Pose identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+  auto compose = [](const Pose &a, const Pose &b) {
+    Pose out{};
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col)
+        for (int k = 0; k < 3; ++k) out[row * 4 + col] += a[row * 4 + k] * b[k * 4 + col];
+      out[row * 4 + 3] = a[row * 4 + 3];
+      for (int k = 0; k < 3; ++k) out[row * 4 + 3] += a[row * 4 + k] * b[k * 4 + 3];
+    }
+    return out;
+  };
+  auto inverse = [](const Pose &a) {
+    Pose out{};
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col) out[row * 4 + col] = a[col * 4 + row];
+      for (int k = 0; k < 3; ++k) out[row * 4 + 3] -= out[row * 4 + k] * a[k * 4 + 3];
+    }
+    return out;
+  };
+  std::vector<Pose> world(count, identity);
+  std::vector<int> active(static_cast<size_t>(manifest_.num_links), -1);
+  for (size_t link = 0; link < count; ++link) {
+    Pose local;
+    std::copy_n(transforms.begin() + link * 12, 12, local.begin());
+    const int parent = full_parents_.at(link);
+    if (parent >= static_cast<int>(link) && link != 0)
+      throw std::runtime_error("dynamics source links are not topologically ordered");
+    world[link] =
+        parent >= 0 && parent != static_cast<int>(link) ? compose(world.at(parent), local) : local;
+    const int owner = external_force_owners_.at(link);
+    if (full_joint_types_.at(link) >= 0 && owner >= 0) active.at(owner) = static_cast<int>(link);
+  }
+  std::vector<float> reduced(static_cast<size_t>(manifest_.num_links) * 12);
+  for (int node = 0; node < manifest_.num_links; ++node) {
+    const int link = active.at(node);
+    if (link < 0) throw std::runtime_error("missing reduced dynamics active link");
+    int parent = full_parents_.at(link);
+    while (parent >= 0 && parent != full_parents_.at(parent) && full_joint_types_.at(parent) < 0)
+      parent = full_parents_.at(parent);
+    const bool root = parent < 0 || full_joint_types_.at(parent) < 0;
+    const auto local = root ? world.at(link) : compose(inverse(world.at(parent)), world.at(link));
+    std::copy(local.begin(), local.end(), reduced.begin() + node * 12);
+  }
+  for (size_t link = 0; link < count; ++link) {
+    const int owner = external_force_owners_.at(link);
+    if (owner < 0) continue;
+    const auto local = compose(inverse(world.at(active.at(owner))), world.at(link));
+    for (int row = 0; row < 3; ++row) {
+      for (int column = 0; column < 3; ++column)
+        external_force_transforms_[link * 12 + row * 3 + column] = local[row * 4 + column];
+      external_force_transforms_[link * 12 + 9 + row] = local[row * 4 + 3];
+    }
+  }
+  curobo_robot_runtime::update_fixed_transform_buffer(fixed_transforms_, reduced);
+  std::vector<float> masses, inertias;
+  recompute_reduced_model(original_masses_com_, original_inertias_, &masses, &inertias);
+  CRR_CUDA_CHECK(cudaMemcpy(reinterpret_cast<void *>(link_masses_com_.ptr()), masses.data(),
+                            masses.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CRR_CUDA_CHECK(cudaMemcpy(reinterpret_cast<void *>(link_inertias_.ptr()), inertias.data(),
+                            inertias.size() * sizeof(float), cudaMemcpyHostToDevice));
 }
 
 void RolloutRuntime::update_link_inertial(

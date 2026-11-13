@@ -820,7 +820,7 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
   }
   if (manifest.num_dof <= 0 || manifest.num_links <= 0 || manifest.num_tool_frames <= 0 ||
       manifest.num_spheres <= 0 || manifest.num_self_collision_pairs < 0 ||
-      manifest.num_knots < 12 || manifest.num_knots > 1024 || manifest.trajectory_steps <= 16 ||
+      manifest.num_knots < 6 || manifest.num_knots > 1024 || manifest.trajectory_steps <= 16 ||
       manifest.interpolation_buffer_size < manifest.trajectory_steps ||
       manifest.minimum_interpolation_buffer_size < manifest.trajectory_steps ||
       manifest.spline_degree != 3 || manifest.max_seeds <= 0 || manifest.history <= 0 ||
@@ -1495,6 +1495,16 @@ DeviceBuffer& DeviceBuffer::operator=(DeviceBuffer&& other) noexcept {
   return *this;
 }
 
+void update_fixed_transform_buffer(DeviceBuffer &buffer, const std::vector<float> &transforms) {
+  if (transforms.size() * sizeof(float) != buffer.bytes() ||
+      !std::all_of(transforms.begin(), transforms.end(),
+                   [](float value) { return std::isfinite(value); })) {
+    throw std::invalid_argument("fixed transforms must be finite and match the exported model");
+  }
+  CRR_CUDA_CHECK(cudaMemcpy(reinterpret_cast<void *>(buffer.ptr()), transforms.data(),
+                            buffer.bytes(), cudaMemcpyHostToDevice));
+}
+
 void DeviceBuffer::allocate(size_t bytes) {
   release();
   CRR_CUDA_CHECK(cudaMalloc(&pointer_, std::max<size_t>(bytes, 1)));
@@ -1648,6 +1658,11 @@ const std::string& RobotRuntimeImpl::tool_frame_name(int index) const {
     throw std::out_of_range("tool-frame index is out of range");
   }
   return manifest_.tool_frames.at(static_cast<size_t>(index));
+}
+
+void RobotRuntimeImpl::update_fixed_transforms(const std::vector<float> &transforms) {
+  CRR_CUDA_CHECK(cudaSetDevice(device_ordinal_));
+  update_fixed_transform_buffer(fixed_transforms_, transforms);
 }
 
 RobotRuntimeImpl::ModelDeviceView RobotRuntimeImpl::model_device_view() const {

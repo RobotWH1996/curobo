@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include <map>
 #include "cuda_check.h"
 #include "motion_planner_runtime.h"
 #include "mpc_cuda.h"
@@ -125,11 +126,19 @@ class MpcRuntime final {
 
   ~MpcRuntime() {
     cudaSetDevice(optimizer_->config_.device_ordinal);
+    for (auto &item : iteration_graphs_) {
+      cudaGraphExecDestroy(item.second.second);
+      cudaGraphDestroy(item.second.first);
+    }
     if (graph_exec_ != nullptr) cudaGraphExecDestroy(graph_exec_);
     if (graph_ != nullptr) cudaGraphDestroy(graph_);
     if (check_graph_exec_ != nullptr) cudaGraphExecDestroy(check_graph_exec_);
     if (check_graph_ != nullptr) cudaGraphDestroy(check_graph_);
     if (default_stream_ != nullptr) cudaStreamDestroy(default_stream_);
+  }
+
+  void update_fixed_transforms(const std::vector<float> &transforms) {
+    optimizer_->update_fixed_transforms(transforms);
   }
 
   TrajectoryOptimizationInfo info() const { return optimizer_->info(); }
@@ -242,6 +251,44 @@ class MpcRuntime final {
     return result;
   }
 
+  void set_iterations(int iterations) {
+    if (iterations <= 0 || iterations % 25 != 0)
+      throw std::invalid_argument("MPC iterations must be a positive multiple of 25");
+    if (iterations == config_.iterations) return;
+    CRR_CUDA_CHECK(cudaDeviceSynchronize());
+    if (graph_exec_) iteration_graphs_[config_.iterations] = {graph_, graph_exec_};
+    graph_ = nullptr;
+    graph_exec_ = nullptr;
+    const auto found = iteration_graphs_.find(iterations);
+    if (found != iteration_graphs_.end()) {
+      graph_ = found->second.first;
+      graph_exec_ = found->second.second;
+      iteration_graphs_.erase(found);
+    }
+    config_.iterations = iterations;
+    optimizer_->config_.max_iterations = iterations;
+  }
+  void set_joint_tracking(const std::vector<float> &reference,
+                          const std::vector<float> &dof_weights, float weight) {
+    const int dof = info().num_dof;
+    if (reference.size() != static_cast<size_t>(dof) || dof_weights.size() != reference.size() ||
+        !std::isfinite(weight) || weight < 0.F)
+      throw std::invalid_argument("invalid MPC joint tracking dimensions or weight");
+    for (size_t i = 0; i < reference.size(); ++i)
+      if (!std::isfinite(reference[i]) || !std::isfinite(dof_weights[i]) || dof_weights[i] < 0.F)
+        throw std::invalid_argument("nonfinite MPC joint tracking reference");
+    CRR_CUDA_CHECK(cudaMemcpy(data(goal_), reference.data(), reference.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+    CRR_CUDA_CHECK(cudaMemcpy(reinterpret_cast<void *>(optimizer_->cspace_target_weight_.ptr()),
+                              &weight, sizeof(float), cudaMemcpyHostToDevice));
+    const float nonterminal = 1.F;
+    CRR_CUDA_CHECK(
+        cudaMemcpy(reinterpret_cast<void *>(optimizer_->cspace_non_terminal_weight_.ptr()),
+                   &nonterminal, sizeof(float), cudaMemcpyHostToDevice));
+    CRR_CUDA_CHECK(cudaMemcpy(reinterpret_cast<void *>(optimizer_->cspace_target_dof_weight_.ptr()),
+                              dof_weights.data(), dof_weights.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+  }
   void accept(cudaStream_t stream) {
     if (!pending_) throw std::logic_error("No feasible MPC proposal to accept");
     CRR_CUDA_CHECK(cudaSetDevice(optimizer_->config_.device_ordinal));
@@ -506,6 +553,7 @@ class MpcRuntime final {
   DeviceBuffer output_position_, output_velocity_, output_acceleration_, output_jerk_;
   cudaGraph_t graph_{nullptr};
   cudaGraphExec_t graph_exec_{nullptr};
+  std::map<int, std::pair<cudaGraph_t, cudaGraphExec_t>> iteration_graphs_;
   cudaGraph_t check_graph_{nullptr};
   cudaGraphExec_t check_graph_exec_{nullptr};
   cudaStream_t default_stream_{nullptr};
@@ -519,6 +567,10 @@ MpcController::MpcController(const MotionPlanner &planner, const MpcConfig &conf
     : runtime_(std::make_unique<detail::MpcRuntime>(planner, config)) {}
 MpcController::~MpcController() = default;
 TrajectoryOptimizationInfo MpcController::info() const { return runtime_->info(); }
+void MpcController::update_fixed_transforms(const std::vector<float> &transforms) {
+  runtime_->update_fixed_transforms(transforms);
+}
+
 void MpcController::update_dt(float dt, cudaStream_t stream) { runtime_->update_dt(dt, stream); }
 std::array<float, MpcConfig::TIMING_CANDIDATES> MpcController::candidate_dts() const {
   return runtime_->candidate_dts();
@@ -545,4 +597,15 @@ bool MpcController::validate_trajectory(const float *q, const float *v, const fl
                                         const float *j, float dt, cudaStream_t stream) {
   return runtime_->validate_trajectory(q, v, a, j, dt, stream);
 }
+}  // namespace curobo::robot
+
+namespace curobo::robot {
+void MpcController::set_joint_tracking(const std::vector<float> &reference,
+                                       const std::vector<float> &dof_weights, float weight) {
+  runtime_->set_joint_tracking(reference, dof_weights, weight);
+}
+}  // namespace curobo::robot
+
+namespace curobo::robot {
+void MpcController::set_iterations(int iterations) { runtime_->set_iterations(iterations); }
 }  // namespace curobo::robot

@@ -229,6 +229,11 @@ RrtRuntime::~RrtRuntime() {
   }
 }
 
+void RrtRuntime::update_fixed_transforms(const std::vector<float> &transforms) {
+  robot_.update_fixed_transforms(transforms);
+  if (rollout_) rollout_->update_fixed_transforms(transforms);
+}
+
 CuroboRobotInfo RrtRuntime::robot_info() const { return robot_.info(); }
 
 int RrtRuntime::attachment_sphere_capacity(
