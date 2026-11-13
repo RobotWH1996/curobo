@@ -167,6 +167,8 @@ class CSpaceParams:
         self.velocity_scale = self.velocity_scale[new_index].clone()
         self.acceleration_scale = self.acceleration_scale[new_index].clone()
         self.jerk_scale = self.jerk_scale[new_index].clone()
+        if isinstance(self.position_limit_clip, torch.Tensor):
+            self.position_limit_clip = self.position_limit_clip[new_index].clone()
         joint_names = [self.joint_names[n] for n in new_index]
         self.joint_names = joint_names
 

@@ -280,17 +280,22 @@ class TestCSpaceParams:
             default_joint_position=torch.tensor([0.0, 1.0, 2.0, 3.0], **(cuda_device_cfg.as_torch_dict())),
             null_space_weight=torch.ones(4, **(cuda_device_cfg.as_torch_dict())),
             cspace_distance_weight=torch.ones(4, **(cuda_device_cfg.as_torch_dict())),
+            position_limit_clip=[0.01, 0.02, 0.03, 0.04],
             device_cfg=cuda_device_cfg,
         )
 
         # Reindex to a subset
-        new_joint_names = ["joint2", "joint4"]
+        new_joint_names = ["joint4", "joint2"]
         cspace.inplace_reindex(new_joint_names)
 
         assert len(cspace.joint_names) == 2
         assert cspace.default_joint_position.shape == (2,)
         # Check that values are correctly reindexed
-        assert torch.allclose(cspace.default_joint_position, torch.tensor([1.0, 3.0], **(cuda_device_cfg.as_torch_dict())))
+        assert torch.allclose(cspace.default_joint_position, torch.tensor([3.0, 1.0], **(cuda_device_cfg.as_torch_dict())))
+        torch.testing.assert_close(
+            cspace.position_limit_clip,
+            torch.tensor([0.04, 0.02], **cuda_device_cfg.as_torch_dict()),
+        )
 
     def test_cspace_cfg_with_max_acceleration(self, cuda_device_cfg):
         """Test CSpaceParams with max_acceleration parameter."""
