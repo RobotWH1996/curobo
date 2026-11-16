@@ -339,6 +339,11 @@ class MotionPlanner final {
   /** Number of RRT calls made by the last planning request. */
   int last_rrt_calls() const;
 
+  /** Diagnostics for the most recent RRT call of the last planning request.
+   * Counts describe candidate pairs (the same joint state may appear in several pairs).
+   */
+  RrtDiagnostics last_rrt_diagnostics() const;
+
   /** Return the artifact's preallocated collision-sphere slots for a link. */
   int attachment_sphere_capacity(const std::string& link_name) const;
 

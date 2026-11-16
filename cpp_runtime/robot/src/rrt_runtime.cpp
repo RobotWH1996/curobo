@@ -1654,8 +1654,9 @@ bool RrtRuntime::finalize_paths(const RrtRequest& request, int plans,
       iteration_counts.size() * sizeof(int32_t), cudaMemcpyHostToDevice,
       cuda_stream));
   CRR_CUDA_CHECK(cudaStreamSynchronize(cuda_stream));
-  return std::any_of(success.begin(), success.end(),
-                     [](uint8_t value) { return value != 0U; });
+  diagnostics_.paths_found = std::count_if(success.begin(), success.end(),
+                                          [](uint8_t value) { return value != 0U; });
+  return diagnostics_.paths_found > 0;
 }
 
 void RrtRuntime::finish_failure(const RrtRequest& request, int plans,
@@ -1677,6 +1678,7 @@ void RrtRuntime::finish_failure(const RrtRequest& request, int plans,
 }
 
 void RrtRuntime::plan(const RrtRequest& request) const {
+  diagnostics_ = {};
   CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
   if (request.start_position == nullptr || request.goal_position == nullptr ||
       request.path == nullptr || request.path_count == nullptr ||
@@ -1702,8 +1704,8 @@ void RrtRuntime::plan(const RrtRequest& request) const {
       value = value == 0U ? 0U : 1U;
     }
   }
-  if (std::none_of(requested.begin(), requested.end(),
-                   [](uint8_t value) { return value != 0U; })) {
+  diagnostics_.requested_pairs = std::count(requested.begin(), requested.end(), 1U);
+  if (diagnostics_.requested_pairs == 0) {
     finish_failure(request, plans, 0, stream);
     return;
   }
@@ -1732,29 +1734,31 @@ void RrtRuntime::plan(const RrtRequest& request) const {
   CRR_CUDA_CHECK(cudaStreamSynchronize(cuda_stream));
   for (int plan = 0; plan < plans; ++plan) {
     const auto index = static_cast<size_t>(plan);
-    active.at(index) =
-        requested.at(index) != 0U && terminal_feasible.at(index) != 0U &&
-                terminal_feasible.at(static_cast<size_t>(plans + plan)) != 0U
-            ? 1U
-            : 0U;
-    direct_reached.at(index) =
-        active.at(index) != 0U && direct_reached.at(index) != 0U ? 1U : 0U;
+    const bool start_valid = terminal_feasible.at(index) != 0U;
+    const bool goal_valid = terminal_feasible.at(static_cast<size_t>(plans + plan)) != 0U;
+    if (requested.at(index) != 0U) {
+      diagnostics_.invalid_starts += !start_valid;
+      diagnostics_.invalid_goals += !goal_valid;
+    }
+    active.at(index) = requested.at(index) != 0U && start_valid && goal_valid;
+    direct_reached.at(index) = active.at(index) != 0U && direct_reached.at(index) != 0U;
+    diagnostics_.valid_pairs += active.at(index);
+    diagnostics_.paths_found += direct_reached.at(index);
   }
   CRR_CUDA_CHECK(cudaMemcpyAsync(
       reinterpret_cast<void*>(active_plans_.ptr()), active.data(), active.size(),
       cudaMemcpyHostToDevice, cuda_stream));
-  if (std::none_of(active.begin(), active.end(),
-                   [](uint8_t value) { return value != 0U; })) {
+  if (diagnostics_.valid_pairs == 0) {
     finish_failure(request, plans, 0, stream);
     return;
   }
-  if (std::any_of(direct_reached.begin(), direct_reached.end(),
-                  [](uint8_t value) { return value != 0U; })) {
+  if (diagnostics_.paths_found > 0) {
     finish_direct(request, direct_reached, stream);
     return;
   }
 
   for (int iteration = 0; iteration < config_.max_iterations; ++iteration) {
+    diagnostics_.iterations = iteration + 1;
     prepare_samples(next_samples(plans), plans, stream);
     const bool start_is_active = iteration % 2 == 0;
     launch_search_graph(start_is_active ? SearchGraphKind::START_GROWTH
@@ -1775,6 +1779,7 @@ void RrtRuntime::plan(const RrtRequest& request) const {
                    connection.at(offset + 1) >= 0);
     }
     if (connected) {
+      diagnostics_.trees_connected = true;
       if (finalize_paths(request, plans, iteration + 1, stream)) {
         return;
       }

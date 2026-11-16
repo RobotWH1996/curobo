@@ -36,6 +36,7 @@ class MotionPlannerRuntime final {
   double last_ik_time() const { return last_ik_time_seconds_; }
   double last_rrt_time() const { return last_rrt_time_seconds_; }
   int last_rrt_calls() const { return last_rrt_calls_; }
+  RrtDiagnostics last_rrt_diagnostics() const;
   int attachment_sphere_capacity(const std::string& link_name) const;
   void attach_object(const SphereAttachment& attachment);
   void set_link_collision_mask(const std::string& link_name, uint32_t layers);

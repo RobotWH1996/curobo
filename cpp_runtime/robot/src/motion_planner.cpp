@@ -67,6 +67,10 @@ int MotionPlanner::last_rrt_calls() const {
   return runtime_->last_rrt_calls();
 }
 
+RrtDiagnostics MotionPlanner::last_rrt_diagnostics() const {
+  return runtime_->last_rrt_diagnostics();
+}
+
 int MotionPlanner::attachment_sphere_capacity(
     const std::string& link_name) const {
   return runtime_->attachment_sphere_capacity(link_name);

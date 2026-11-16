@@ -14,6 +14,16 @@
 
 namespace curobo::robot {
 
+struct RrtDiagnostics {
+  int requested_pairs{0};
+  int invalid_starts{0};
+  int invalid_goals{0};
+  int valid_pairs{0};
+  int iterations{0};
+  int paths_found{0};
+  bool trees_connected{false};
+};
+
 class Scene;
 
 namespace detail {

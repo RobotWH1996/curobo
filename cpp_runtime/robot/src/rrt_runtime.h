@@ -42,6 +42,7 @@ class RrtRuntime final {
   void update_links_inertial(const LinkInertialUpdates& updates);
   void reset_seed();
   void plan(const RrtRequest& request) const;
+  RrtDiagnostics last_diagnostics() const { return diagnostics_; }
 
  private:
   enum class SearchGraphKind { DIRECT, START_GROWTH, GOAL_GROWTH };
@@ -164,6 +165,7 @@ class RrtRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer state_feasible_;
   mutable curobo_robot_runtime::DeviceBuffer active_plans_;
   mutable curobo_robot_runtime::DeviceBuffer direct_point_count_;
+  mutable RrtDiagnostics diagnostics_;
   mutable curobo_robot_runtime::DeviceBuffer direct_terminal_feasible_;
   mutable curobo_robot_runtime::DeviceBuffer reconstruction_path_lengths_;
 

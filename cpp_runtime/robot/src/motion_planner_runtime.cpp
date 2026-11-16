@@ -25,6 +25,10 @@
 
 namespace curobo::robot::detail {
 
+RrtDiagnostics MotionPlannerRuntime::last_rrt_diagnostics() const {
+  return last_rrt_calls_ > 0 ? rrt_->last_diagnostics() : RrtDiagnostics{};
+}
+
 TrajectoryOptimizationCandidates MotionPlannerRuntime::candidates() const {
   return trajectory_optimizer_->candidates();
 }
