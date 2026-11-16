@@ -182,6 +182,16 @@ class MpcRuntime final {
     reset_seed(seed, stream);
   }
 
+  void update_joint_goal(const float *goal, cudaStream_t stream) {
+    if (!initialized_ || cartesian_) throw std::logic_error("Reset joint MPC first");
+    if (!goal) throw std::invalid_argument("Missing joint goal");
+    CRR_CUDA_CHECK(cudaSetDevice(optimizer_->config_.device_ordinal));
+    stream = resolve_stream(stream);
+    copy(goal_, goal, stream);
+    CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
+    pending_ = false;  // A proposal for the previous goal cannot be accepted.
+  }
+
   void update_cartesian_target(const float *positions, const float *quaternions,
                                cudaStream_t stream) {
     if (!initialized_ || !cartesian_) throw std::logic_error("Reset Cartesian MPC first");
@@ -583,6 +593,9 @@ void MpcController::reset_cartesian(const float *positions, const float *quatern
                                     const float *seed, const MpcCartesianConfig &config,
                                     cudaStream_t stream) {
   runtime_->reset_cartesian(positions, quaternions, seed, config, stream);
+}
+void MpcController::update_joint_goal(const float *goal, cudaStream_t stream) {
+  runtime_->update_joint_goal(goal, stream);
 }
 void MpcController::update_cartesian_target(const float *positions, const float *quaternions,
                                             cudaStream_t stream) {

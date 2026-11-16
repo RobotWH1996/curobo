@@ -9,6 +9,32 @@ namespace {
 
 constexpr int BLOCK_SIZE = 128;
 
+__device__ __forceinline__ bool outside(float value, const float *bounds, int joint,
+                                        int dof, float tolerance) {
+  return !isfinite(value) || value < bounds[joint] - tolerance ||
+         value > bounds[dof + joint] + tolerance;
+}
+
+__global__ void validate_configurations(
+    const float *position, const float *world_cost, const float *self_cost,
+    const float *position_bounds, const float *velocity_bounds, const float *acceleration_bounds,
+    const float *jerk_bounds, const float *effort, const float *effort_bounds,
+    float tolerance, int count, int dof, uint8_t *violations) {
+  const int state = blockIdx.x * blockDim.x + threadIdx.x;
+  if (state >= count) return;
+  const float collision = world_cost[state] + self_cost[state];
+  bool invalid = !isfinite(collision) || collision > tolerance;
+  for (int joint = 0; joint < dof && !invalid; ++joint) {
+    const int i = state * dof + joint;
+    invalid = outside(position[i], position_bounds, joint, dof, tolerance) ||
+              outside(0.F, velocity_bounds, joint, dof, tolerance) ||
+              outside(0.F, acceleration_bounds, joint, dof, tolerance) ||
+              outside(0.F, jerk_bounds, joint, dof, tolerance) ||
+              (effort_bounds && outside(effort[i], effort_bounds, joint, dof, tolerance));
+  }
+  violations[state] = invalid ? 1 : 0;
+}
+
 __global__ void moving_reference_margin(float *dt, const float *velocity, const float *acceleration,
                                         int seeds, int dof, float factor, float maximum_dt) {
   const int seed = blockIdx.x * blockDim.x + threadIdx.x;
@@ -226,6 +252,17 @@ cudaError_t launch_validate_tool_path(const float *p, const float *q, const floa
                                  layout, violation);
   return cudaGetLastError();
 }
+cudaError_t launch_validate_configurations(
+    const float *position, const float *world_cost, const float *self_cost,
+    const float *position_bounds, const float *velocity_bounds, const float *acceleration_bounds,
+    const float *jerk_bounds, const float *effort, const float *effort_bounds,
+    float tolerance, int count, int dof, uint8_t *violations, cudaStream_t stream) {
+  validate_configurations<<<(count + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, 0, stream>>>(
+      position, world_cost, self_cost, position_bounds, velocity_bounds, acceleration_bounds,
+      jerk_bounds, effort, effort_bounds, tolerance, count, dof, violations);
+  return cudaGetLastError();
+}
+
 cudaError_t launch_moving_reference_margin(float *dt, const float *velocity,
                                            const float *acceleration, int seeds, int dof,
                                            float factor, float maximum_dt, cudaStream_t stream) {

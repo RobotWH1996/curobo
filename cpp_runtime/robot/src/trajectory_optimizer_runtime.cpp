@@ -2176,6 +2176,21 @@ const int32_t *TrajectoryOptimizerRuntime::validate(
   return reinterpret_cast<const int32_t *>(validation_violation_.ptr());
 }
 
+void TrajectoryOptimizerRuntime::validate_configurations(
+    const float *positions, int count, uint8_t *violations, cudaStream_t stream) const {
+  if (!positions || !violations || count <= 0 || count > manifest_.interpolation_buffer_size)
+    throw std::invalid_argument("invalid configuration validation buffers or count");
+  CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
+  const size_t bytes = static_cast<size_t>(count) * manifest_.num_dof * sizeof(float);
+  CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(validation_position_.ptr()),
+                                positions, bytes, cudaMemcpyDeviceToDevice, stream));
+  if (config_.check_effort_limits) {
+    CRR_CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void *>(validation_velocity_.ptr()), 0, bytes, stream));
+    CRR_CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void *>(validation_acceleration_.ptr()), 0, bytes, stream));
+  }
+  validate_states(reinterpret_cast<CUstream>(stream), false, false, count, violations);
+}
+
 void TrajectoryOptimizerRuntime::validate_interpolated(
     CUdeviceptr knots, CUstream stream) const {
   int total_knots =
@@ -2262,11 +2277,15 @@ void TrajectoryOptimizerRuntime::validate_interpolated(
 }
 
 void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
-                                                 bool check_tool_path) const {
+                                                 bool check_tool_path,
+                                                 int configuration_count,
+                                                 uint8_t *configuration_violations) const {
   const bool check_effort = config_.check_effort_limits || timeopt;
-  const int validation_horizon = manifest_.interpolation_buffer_size;
+  const int seeds = configuration_count ? 1 : config_.num_seeds;
+  const int validation_horizon = configuration_count ? configuration_count
+                                                      : manifest_.interpolation_buffer_size;
   const size_t interpolation_values =
-      static_cast<size_t>(config_.num_seeds) * validation_horizon * manifest_.num_dof;
+      static_cast<size_t>(seeds) * validation_horizon * manifest_.num_dof;
   auto* streams = rollout_streams(stream);
   const auto primary = reinterpret_cast<cudaStream_t>(stream);
   const auto driver = [&](RolloutStream role) {
@@ -2293,12 +2312,12 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
     rollout_->launch_inverse_dynamics(
         validation_position_.ptr(), validation_velocity_.ptr(), validation_acceleration_.ptr(),
         validation_joint_effort_.ptr(), validation_rnea_forward_cache_.ptr(),
-        config_.num_seeds * validation_horizon, driver(RolloutStream::DYNAMICS), false);
+        seeds * validation_horizon, driver(RolloutStream::DYNAMICS), false);
     record(RolloutEvent::DYNAMICS_READY, dynamics);
   }
 
   wait(kinematics, RolloutEvent::STATE_READY);
-  launch_kinematics_to(config_.num_seeds, validation_horizon, validation_position_.ptr(),
+  launch_kinematics_to(seeds, validation_horizon, validation_position_.ptr(),
                        validation_link_position_.ptr(), validation_link_quaternion_.ptr(),
                        validation_robot_spheres_.ptr(), validation_global_cumulative_.ptr(),
                        driver(RolloutStream::KINEMATICS));
@@ -2306,11 +2325,11 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
   wait(world, RolloutEvent::KINEMATICS_READY);
   wait(self, RolloutEvent::KINEMATICS_READY);
   launch_discrete_world_collision_to(
-      config_.num_seeds, validation_horizon, validation_robot_spheres_.ptr(),
+      seeds, validation_horizon, validation_robot_spheres_.ptr(),
       validation_world_collision_cost_.ptr(), validation_world_collision_gradient_.ptr(), true,
       driver(RolloutStream::WORLD));
   record(RolloutEvent::WORLD_DONE, world);
-  launch_self_collision_to(config_.num_seeds, validation_horizon, validation_robot_spheres_.ptr(),
+  launch_self_collision_to(seeds, validation_horizon, validation_robot_spheres_.ptr(),
                            validation_self_collision_cost_.ptr(),
                            validation_self_collision_gradient_.ptr(),
                            validation_self_collision_sparse_index_.ptr(),
@@ -2320,6 +2339,19 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
   wait(primary, RolloutEvent::SELF_DONE);
   if (check_effort) {
     wait(primary, RolloutEvent::DYNAMICS_READY);
+  }
+
+  if (configuration_count) {
+    const auto data = [](const auto &buffer) { return reinterpret_cast<const float *>(buffer.ptr()); };
+    const float *effort_bounds = check_effort
+        ? reinterpret_cast<const float *>(rollout_->effort_bounds()) : nullptr;
+    CRR_CUDA_CHECK(launch_validate_configurations(
+        data(validation_position_), data(validation_world_collision_cost_),
+        data(validation_self_collision_cost_), data(position_bounds_), data(velocity_bounds_),
+        data(acceleration_bounds_), data(jerk_bounds_), data(validation_joint_effort_),
+        effort_bounds, config_.constraint_tolerance, configuration_count, manifest_.num_dof,
+        configuration_violations, primary));
+    return;
   }
 
   validation_violation_.clear(reinterpret_cast<cudaStream_t>(stream));

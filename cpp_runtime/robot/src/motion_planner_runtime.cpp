@@ -44,6 +44,11 @@ void MotionPlannerRuntime::set_execution_speed_scale(float scale) {
 const int32_t *MotionPlannerRuntime::validate(const TrajectoryValidationRequest &request) const {
   return trajectory_optimizer_->validate(request);
 }
+
+void MotionPlannerRuntime::validate_configurations(const float *positions, int count,
+                                            uint8_t *violations, cudaStream_t stream) const {
+  trajectory_optimizer_->validate_configurations(positions, count, violations, stream);
+}
 namespace {
 
 size_t checked_product(size_t left, size_t right, const char* description) {

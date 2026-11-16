@@ -381,6 +381,13 @@ class MotionPlanner final {
 
   /** Validate sampled states using this planner's model, scene, and streams. */
   const int32_t *validate(const TrajectoryValidationRequest &request) const;
+  /** Check independent stationary configurations in CUDA positions [count, dof].
+   * Output CUDA violations [count] uses zero for valid and one for invalid.
+   * Count must be in [1, interpolation_buffer_size]. Uses the live planner
+   * scene, model and validation thresholds. All buffers must live until stream completion.
+   */
+  void validate_configurations(const float *positions, int count, uint8_t *violations,
+                               cudaStream_t stream = nullptr) const;
   /** Create private IK workspace sharing this planner's live robot and Scene. */
   std::unique_ptr<InverseKinematics> create_inverse_kinematics(
       const InverseKinematicsConfig& config) const;

@@ -49,6 +49,8 @@ class TrajectoryOptimizerRuntime final {
   void set_execution_speed_scale(float scale);
   const int32_t *validate(const TrajectoryValidationRequest &request,
                           bool timeopt = false) const;
+  void validate_configurations(const float *positions, int count, uint8_t *violations,
+                               cudaStream_t stream = nullptr) const;
 
  private:
   friend class MotionPlannerRuntime;
@@ -135,7 +137,8 @@ class TrajectoryOptimizerRuntime final {
   void optimize_pass(const TrajectoryOptimizationRequest &request, CUstream stream, int iterations,
                      bool continuation = false) const;
   void validate_interpolated(CUdeviceptr knots, CUstream stream) const;
-  void validate_states(CUstream stream, bool timeopt = false, bool check_tool_path = true) const;
+  void validate_states(CUstream stream, bool timeopt = false, bool check_tool_path = true,
+                       int configuration_count = 0, uint8_t *configuration_violations = nullptr) const;
   void accumulate(bool first_pass,
                   const TrajectoryOptimizationRequest& request,
                   CUstream stream) const;

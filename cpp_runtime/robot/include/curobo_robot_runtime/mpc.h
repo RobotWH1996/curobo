@@ -106,6 +106,8 @@ class MpcController final {
    */
   void reset_cartesian(const float *positions, const float *quaternions, const float *seed_knots,
                        const MpcCartesianConfig &config = {}, cudaStream_t stream = nullptr);
+  /** Update the CUDA joint goal [dof] after reset(), retaining the accepted seed and graphs. */
+  void update_joint_goal(const float *goal, cudaStream_t stream = nullptr);
   /** Update CUDA Cartesian targets without clearing history or recapturing. */
   void update_cartesian_target(const float *positions, const float *quaternions,
                                cudaStream_t stream = nullptr);

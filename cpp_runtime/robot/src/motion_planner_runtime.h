@@ -52,6 +52,8 @@ class MotionPlannerRuntime final {
   TimeOptTrajectory timeopt_trajectory() const;
   void set_execution_speed_scale(float scale);
   const int32_t *validate(const TrajectoryValidationRequest &request) const;
+  void validate_configurations(const float *positions, int count, uint8_t *violations,
+                               cudaStream_t stream = nullptr) const;
   std::unique_ptr<InverseKinematics> create_inverse_kinematics(
       const InverseKinematicsConfig& config) const;
   GraspPlanningStatus plan_grasp(const GraspPlanningRequest& request) const;

@@ -23,6 +23,11 @@ const int32_t *MotionPlanner::validate(const TrajectoryValidationRequest &reques
   return runtime_->validate(request);
 }
 
+void MotionPlanner::validate_configurations(const float *positions, int count,
+                                            uint8_t *violations, cudaStream_t stream) const {
+  runtime_->validate_configurations(positions, count, violations, stream);
+}
+
 MotionPlanner::MotionPlanner(const std::string& artifact_directory,
                              const MotionPlanningConfig& config,
                              const Scene* scene)
