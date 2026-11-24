@@ -34,9 +34,11 @@ __global__ void tool_upright(const float *positions, const float *quaternions,
     distance += delta[axis] * delta[axis];
   }
   if (distance > 0.01F) {
-    extra += 3.F * weight * (distance - 0.01F);
+    constexpr float straight_path_weight_scale = 1.5F;
+    const float straight_path_weight = straight_path_weight_scale * weight;
+    extra += straight_path_weight * (distance - 0.01F);
     for (int axis = 0; axis < 3; ++axis)
-      position_gradient[index * 3 + axis] += 6.F * weight * delta[axis];
+      position_gradient[index * 3 + axis] += 2.F * straight_path_weight * delta[axis];
   }
   cost[index * 2] += extra;
 }

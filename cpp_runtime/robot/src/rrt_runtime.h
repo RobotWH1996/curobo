@@ -42,6 +42,8 @@ class RrtRuntime final {
   void update_links_inertial(const LinkInertialUpdates& updates);
   void reset_seed();
   void plan(const RrtRequest& request) const;
+  void classify_configurations(const float* positions, int count, uint8_t* feasible,
+                               cudaStream_t stream) const;
   RrtDiagnostics last_diagnostics() const { return diagnostics_; }
 
  private:

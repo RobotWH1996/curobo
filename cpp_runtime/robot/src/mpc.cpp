@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -19,6 +21,7 @@ namespace curobo::robot::detail {
 namespace {
 using curobo_robot_runtime::DeviceBuffer;
 constexpr int CANDIDATES = MpcConfig::TIMING_CANDIDATES;
+constexpr float kMaxValidationSphereStep = 0.01F;
 float *data(const DeviceBuffer &value) { return reinterpret_cast<float *>(value.ptr()); }
 void copy(DeviceBuffer &destination, const float *source, cudaStream_t stream) {
   CRR_CUDA_CHECK(cudaMemcpyAsync(data(destination), source, destination.bytes(),
@@ -42,6 +45,9 @@ class MpcRuntime final {
     optimizer_config.max_iterations = config.iterations;
     optimizer_config.line_search_backtracking = config.line_search_backtracking;
     optimizer_config.finetune_attempts = 0;
+    // MPC validates and returns fixed-timing candidates. TrajOpt's TimeOpt
+    // finalization would replace that acceptance with a retimed trajectory.
+    optimizer_config.enable_timeopt = false;
     optimizer_config.trajectory_dt = config.trajectory_dt;
     optimizer_config.collision_activation_distance = config.collision_activation_distance;
     optimizer_ = std::make_unique<TrajectoryOptimizerRuntime>(
@@ -253,6 +259,7 @@ class MpcRuntime final {
     CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
     result.feasible =
         feasible != 0 && std::isfinite(result.cost) && std::isfinite(result.collision_cost);
+    if (!result.feasible && trace_rejections_) trace_rejection();
     result.position = data(output_position_);
     result.velocity = data(output_velocity_);
     result.acceleration = data(output_acceleration_);
@@ -330,7 +337,7 @@ class MpcRuntime final {
       try {
         const auto driver_stream = reinterpret_cast<CUstream>(stream);
         opt.launch_kinematics(1, driver_stream);
-        opt.launch_world_collision(1, driver_stream);
+        opt.launch_world_collision(1, driver_stream, /*use_metrics=*/true);
         opt.launch_self_collision(1, driver_stream);
         violation_.clear(stream);
         CRR_CUDA_CHECK(launch_mpc_validate(
@@ -339,7 +346,7 @@ class MpcRuntime final {
             data(opt.acceleration_bounds_), data(opt.jerk_bounds_),
             data(opt.world_collision_cost_), data(opt.self_collision_cost_),
             data(opt.robot_spheres_), opt.manifest_.num_spheres,
-            config_.collision_activation_distance * 2.0F,
+            kMaxValidationSphereStep,
             reinterpret_cast<int *>(violation_.ptr()), info().trajectory_steps, info().num_dof,
             stream));
       } catch (...) {
@@ -440,6 +447,9 @@ class MpcRuntime final {
     upload(path_direction_, direction.data(), sizeof(direction));
     const float cspace_weight = cartesian ? 0.F : cspace_weight_;
     upload(opt.cspace_target_weight_, &cspace_weight, sizeof(float));
+    upload(opt.cspace_non_terminal_weight_, &default_non_terminal_weight_, sizeof(float));
+    upload(opt.cspace_target_dof_weight_, default_dof_weights_.data(),
+           default_dof_weights_.size() * sizeof(float));
     const std::array<float, 2> pose_weight =
         cartesian ? config_.tool_pose_weight : std::array<float, 2>{0.F, 0.F};
     upload(opt.tool_pose_weight_, pose_weight.data(), sizeof(pose_weight));
@@ -477,6 +487,13 @@ class MpcRuntime final {
     upload(optimizer_->cspace_target_weight_, 15, 1);
     cspace_weight_ = values[15];
     upload(optimizer_->cspace_non_terminal_weight_, 16, 1);
+    default_non_terminal_weight_ = values[16];
+    const auto &dof_weights = optimizer_->cspace_target_dof_weight_;
+    default_dof_weights_.resize(info().num_dof);
+    if (dof_weights.bytes() != default_dof_weights_.size() * sizeof(float))
+      throw std::logic_error("MPC per-joint weight shape mismatch");
+    CRR_CUDA_CHECK(cudaMemcpy(default_dof_weights_.data(), data(dof_weights),
+                              dof_weights.bytes(), cudaMemcpyDeviceToHost));
     upload(optimizer_->world_collision_weight_, 17, 1);
     upload(optimizer_->self_collision_weight_, 18, 1);
   }
@@ -514,7 +531,7 @@ class MpcRuntime final {
                       opt.config_.max_iterations);
     // MPC retains fixed phase timing and consumes this pass's best-state metrics.
     opt.evaluate(opt.best_action_.ptr(), opt.config_.num_seeds, opt.search_costs_.ptr(),
-                 opt.search_gradients_.ptr(), request_, reinterpret_cast<CUstream>(stream));
+                 0, request_, reinterpret_cast<CUstream>(stream));
     opt.launch_metrics_collisions(opt.config_.num_seeds, reinterpret_cast<CUstream>(stream));
     opt.validate_interpolated(opt.best_action_.ptr(), reinterpret_cast<CUstream>(stream));
     // Apply the same sampling-density guard to the native candidate, not only
@@ -525,12 +542,9 @@ class MpcRuntime final {
         data(opt.velocity_bounds_), data(opt.acceleration_bounds_), data(opt.jerk_bounds_),
         data(opt.validation_world_collision_cost_), data(opt.validation_self_collision_cost_),
         data(opt.validation_robot_spheres_), opt.manifest_.num_spheres,
-        config_.collision_activation_distance * 2.0F,
+        kMaxValidationSphereStep,
         reinterpret_cast<int *>(opt.validation_violation_.ptr()),
         opt.manifest_.interpolation_buffer_size, shape.num_dof, stream, CANDIDATES));
-    // Native TrajOpt metrics are discrete. Keep the swept check (including
-    // activation clearance) in MPC's acceptance decision, not only its cost.
-    opt.launch_world_collision(CANDIDATES, reinterpret_cast<CUstream>(stream));
     // MPC may make safe partial progress rather than reach the Cartesian goal
     // within one horizon. Keep path/collision/limit acceptance, but do not use
     // terminal pose convergence as candidate feasibility. Costs are unchanged;
@@ -548,6 +562,54 @@ class MpcRuntime final {
     opt.finish_optimization(request_);
   }
 
+  void trace_rejection() const {
+    const auto& opt = *optimizer_;
+    std::array<int32_t, CANDIDATES> masks{};
+    std::array<uint8_t, CANDIDATES> pose_valid{};
+    CRR_CUDA_CHECK(cudaMemcpy(masks.data(),
+        reinterpret_cast<const void *>(opt.validation_violation_.ptr()),
+        sizeof(masks), cudaMemcpyDeviceToHost));
+    CRR_CUDA_CHECK(cudaMemcpy(pose_valid.data(),
+        reinterpret_cast<const void *>(opt.retained_pose_valid_.ptr()),
+        sizeof(pose_valid), cudaMemcpyDeviceToHost));
+    const int dof = opt.manifest_.num_dof;
+    const int steps = opt.manifest_.interpolation_buffer_size;
+    const int lane_values = steps * dof;
+    std::vector<float> positions(CANDIDATES * lane_values);
+    std::vector<float> bounds(2 * dof);
+    std::vector<float> world(CANDIDATES * steps), self(CANDIDATES * steps);
+    CRR_CUDA_CHECK(cudaMemcpy(positions.data(), data(opt.validation_position_),
+                              positions.size() * sizeof(float), cudaMemcpyDeviceToHost));
+    CRR_CUDA_CHECK(cudaMemcpy(bounds.data(), data(opt.position_bounds_),
+                              bounds.size() * sizeof(float), cudaMemcpyDeviceToHost));
+    CRR_CUDA_CHECK(cudaMemcpy(world.data(), data(opt.validation_world_collision_cost_),
+                              world.size() * sizeof(float), cudaMemcpyDeviceToHost));
+    CRR_CUDA_CHECK(cudaMemcpy(self.data(), data(opt.validation_self_collision_cost_),
+                              self.size() * sizeof(float), cudaMemcpyDeviceToHost));
+    for (int lane = 0; lane < CANDIDATES; ++lane) {
+      int joint = -1, sample = -1;
+      float excess = 0.0F;
+      for (int index = 0; index < lane_values; ++index) {
+        const int axis = index % dof;
+        const float position = positions[lane * lane_values + index];
+        const float violation = std::max(bounds[axis] - position, position - bounds[dof + axis]);
+        if (violation > excess) {
+          joint = axis;
+          sample = index / dof;
+          excess = violation;
+        }
+      }
+      const auto world_begin = world.begin() + lane * steps;
+      const auto self_begin = self.begin() + lane * steps;
+      std::fprintf(stderr, "[MPC] candidate=%d dense_mask=%d pose_valid=%u "
+                   "position_excess_rad=%.9g joint_index=%d sample=%d "
+                   "dense_world_peak=%.9g dense_self_peak=%.9g\n",
+                   lane, masks[lane], static_cast<unsigned>(pose_valid[lane]), excess, joint, sample,
+                   *std::max_element(world_begin, world_begin + steps),
+                   *std::max_element(self_begin, self_begin + steps));
+    }
+  }
+
   MpcConfig config_;
   std::unique_ptr<TrajectoryOptimizerRuntime> optimizer_;
   TrajectoryOptimizationRequest request_{};
@@ -558,6 +620,8 @@ class MpcRuntime final {
   DeviceBuffer input_dt_;
   std::array<float, CANDIDATES> candidate_dts_{};
   float cspace_weight_{0.F};
+  float default_non_terminal_weight_{0.F};
+  std::vector<float> default_dof_weights_;
   bool cartesian_{false};
   DeviceBuffer shift_, success_, cost_, collision_cost_, dt_, violation_;
   DeviceBuffer output_position_, output_velocity_, output_acceleration_, output_jerk_;
@@ -568,6 +632,7 @@ class MpcRuntime final {
   cudaGraphExec_t check_graph_exec_{nullptr};
   cudaStream_t default_stream_{nullptr};
   bool initialized_{false}, pending_{false};
+  const bool trace_rejections_{std::getenv("CUROBO_MPC_TRACE_REJECTIONS") != nullptr};
   int captures_{0};
 };
 }  // namespace curobo::robot::detail

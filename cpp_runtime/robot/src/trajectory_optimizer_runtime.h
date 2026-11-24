@@ -66,6 +66,9 @@ class TrajectoryOptimizerRuntime final {
   int resolved_finetune_attempts(
       const TrajectoryOptimizationRequest& request) const;
   void begin_optimization(const TrajectoryOptimizationRequest& request) const;
+  bool accept_seed(const TrajectoryOptimizationRequest& request) const;
+  void evaluate_candidate(CUdeviceptr knots, const TrajectoryOptimizationRequest& request,
+                          CUstream stream) const;
   void run_optimization_pass(const TrajectoryOptimizationRequest &request, int iterations,
                              bool refinement = false, bool continuation = false) const;
   void accumulate_optimization_pass(
@@ -110,7 +113,7 @@ class TrajectoryOptimizerRuntime final {
   void launch_pose(int trajectories,
                    const TrajectoryOptimizationRequest& request,
                    CUstream stream) const;
-  void launch_world_collision(int trajectories, CUstream stream) const;
+  void launch_world_collision(int trajectories, CUstream stream, bool use_metrics = false) const;
   void launch_metrics_world_collision(int trajectories, CUstream stream) const;
   void launch_metrics_collisions(int trajectories, CUstream stream) const;
   void launch_discrete_world_collision_to(

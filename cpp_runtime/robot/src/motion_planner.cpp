@@ -28,6 +28,11 @@ void MotionPlanner::validate_configurations(const float *positions, int count,
   runtime_->validate_configurations(positions, count, violations, stream);
 }
 
+void MotionPlanner::classify_configurations(const float *positions, int count,
+                                            uint8_t *feasible, cudaStream_t stream) const {
+  runtime_->classify_configurations(positions, count, feasible, stream);
+}
+
 MotionPlanner::MotionPlanner(const std::string& artifact_directory,
                              const MotionPlanningConfig& config,
                              const Scene* scene)
@@ -72,8 +77,20 @@ int MotionPlanner::last_rrt_calls() const {
   return runtime_->last_rrt_calls();
 }
 
+TrajoptGraphTiming MotionPlanner::last_trajopt_graph_timing() const {
+  return runtime_->last_trajopt_graph_timing();
+}
+
+bool MotionPlanner::retained_rrt_seed() const {
+  return runtime_->retained_rrt_seed();
+}
+
 RrtDiagnostics MotionPlanner::last_rrt_diagnostics() const {
   return runtime_->last_rrt_diagnostics();
+}
+
+std::vector<std::vector<std::vector<float>>> MotionPlanner::last_rrt_paths() const {
+  return runtime_->last_rrt_paths();
 }
 
 int MotionPlanner::attachment_sphere_capacity(
@@ -106,7 +123,12 @@ void MotionPlanner::update_links_inertial(
 }
 
 void MotionPlanner::plan(const MotionPlanningRequest& request) const {
-  runtime_->plan(request);
+  runtime_->plan(request, /*reset_rrt_samples=*/true);
+}
+
+void MotionPlanner::plan_with_next_rrt_samples(
+    const MotionPlanningRequest& request) const {
+  runtime_->plan(request, /*reset_rrt_samples=*/false);
 }
 
 void MotionPlanner::plan_pose(

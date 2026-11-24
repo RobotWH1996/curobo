@@ -300,16 +300,22 @@ struct GraspPlanningRequest {
   float lift_path_orientation_tolerance{0.174532925F};
 };
 
+struct TrajoptGraphTiming {
+  double capture_ms{0.0};
+  double launch_and_wait_ms{0.0};
+  int captures{0};
+  int launches{0};
+};
+
 /**
  * Single-request joint-space motion planner.
  *
  * The planner first tries straight-seeded TrajOpt when configured, then falls
  * back to RRT, geometric B-spline fitting, and a final TrajOpt pass. Calls are
  * synchronous because stage selection observes device status on the host. When
- * enabled, CUDA graphs cache the direct and RRT-seeded TrajOpt stages for
- * stable request addresses; changing an address recaptures the corresponding
- * graph. One instance must not execute concurrent calls. The Scene must
- * outlive the planner.
+ * enabled, direct and RRT-seeded TrajOpt share a CUDA graph when their request
+ * addresses and options match. One instance must not execute concurrent calls.
+ * The Scene must outlive the planner.
  */
 class MotionPlanner final {
  public:
@@ -338,11 +344,20 @@ class MotionPlanner final {
   double last_ik_time() const;
   /** Number of RRT calls made by the last planning request. */
   int last_rrt_calls() const;
+  /** Host timing for CUDA Graph capture and launch-to-result wait in the last plan. */
+  TrajoptGraphTiming last_trajopt_graph_timing() const;
+  /** Whether the final planning attempt recovered the fitted RRT seed after TrajOpt failed. */
+  bool retained_rrt_seed() const;
 
   /** Diagnostics for the most recent RRT call of the last planning request.
    * Counts describe candidate pairs (the same joint state may appear in several pairs).
    */
   RrtDiagnostics last_rrt_diagnostics() const;
+
+  /** Copy successful joint-space paths from the most recent RRT call to the host.
+   * Each path contains consecutive waypoints, each with num_dof joint values.
+   */
+  std::vector<std::vector<std::vector<float>>> last_rrt_paths() const;
 
   /** Return the artifact's preallocated collision-sphere slots for a link. */
   int attachment_sphere_capacity(const std::string& link_name) const;
@@ -367,6 +382,9 @@ class MotionPlanner final {
   /** Run the configured motion-planning pipeline synchronously. */
   void plan(const MotionPlanningRequest& request) const;
 
+  /** Retry planning using the next samples in the RRT sample bank. */
+  void plan_with_next_rrt_samples(const MotionPlanningRequest& request) const;
+
   /** Run single-pose IK followed by fitted TrajOpt and optional RRT fallback. */
   void plan_pose(const PoseMotionPlanningRequest& request) const;
   /** Follow Cartesian waypoints using terminal IK and the fixed spline optimizer. */
@@ -387,6 +405,13 @@ class MotionPlanner final {
    * scene, model and validation thresholds. All buffers must live until stream completion.
    */
   void validate_configurations(const float *positions, int count, uint8_t *violations,
+                               cudaStream_t stream = nullptr) const;
+
+  /** Classify CUDA positions [count, dof] with the RRT state checks.
+   * Writes one byte per state to CUDA feasible, 1 for valid and 0 otherwise.
+   * Input and output must stay alive until stream completes.
+   */
+  void classify_configurations(const float *positions, int count, uint8_t *feasible,
                                cudaStream_t stream = nullptr) const;
   /** Create private IK workspace sharing this planner's live robot and Scene. */
   std::unique_ptr<InverseKinematics> create_inverse_kinematics(

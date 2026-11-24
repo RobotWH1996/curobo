@@ -111,6 +111,11 @@ class CSpaceParams:
             self.jerk_scale = self.device_cfg.to_device(self.jerk_scale)
         if isinstance(self.position_limit_clip, List):
             self.position_limit_clip = self.device_cfg.to_device(self.position_limit_clip)
+        if isinstance(self.position_limit_clip, torch.Tensor):
+            if self.position_limit_clip.numel() == 1:
+                self.position_limit_clip = self.position_limit_clip.reshape(1).expand(len(self.joint_names)).clone()
+            elif self.position_limit_clip.shape != (len(self.joint_names),):
+                raise ValueError("position_limit_clip must be scalar or have one value per joint")
 
         if self.null_space_maximum_distance is None and self.null_space_weight is not None:
             self.null_space_maximum_distance = self.device_cfg.to_device(

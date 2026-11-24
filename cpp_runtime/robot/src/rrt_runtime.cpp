@@ -1677,6 +1677,24 @@ void RrtRuntime::finish_failure(const RrtRequest& request, int plans,
   CRR_CUDA_CHECK(cudaStreamSynchronize(cuda_stream));
 }
 
+void RrtRuntime::classify_configurations(const float* positions, int count,
+                                         uint8_t* feasible, cudaStream_t cuda_stream) const {
+  if (!positions || !feasible || count <= 0)
+    throw std::invalid_argument("RRT classification requires states and an output buffer");
+  CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
+  refresh_scene_graphs();
+  const auto stream = reinterpret_cast<CUstream>(cuda_stream);
+  const int capacity = static_cast<int>(state_feasible_.bytes() / sizeof(bool));
+  for (int offset = 0; offset < count;) {
+    const int batch = std::min(capacity, count - offset);
+    const auto input = reinterpret_cast<CUdeviceptr>(
+        positions + static_cast<size_t>(offset) * manifest_.num_dof);
+    evaluate_positions(input, batch, stream);
+    classify_states(input, batch, reinterpret_cast<CUdeviceptr>(feasible + offset), stream);
+    offset += batch;
+  }
+}
+
 void RrtRuntime::plan(const RrtRequest& request) const {
   diagnostics_ = {};
   CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));

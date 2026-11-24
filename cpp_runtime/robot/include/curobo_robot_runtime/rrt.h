@@ -22,6 +22,8 @@ struct RrtDiagnostics {
   int iterations{0};
   int paths_found{0};
   bool trees_connected{false};
+  /** Largest waypoint count among successful paths, when queried through MotionPlanner. */
+  int max_path_points{0};
 };
 
 class Scene;

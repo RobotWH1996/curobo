@@ -297,6 +297,17 @@ class TestCSpaceParams:
             torch.tensor([0.04, 0.02], **cuda_device_cfg.as_torch_dict()),
         )
 
+    def test_position_limit_clip_broadcast_before_reindex(self, cuda_device_cfg):
+        cspace = CSpaceParams(joint_names=["a", "b", "c"], device_cfg=cuda_device_cfg,
+                              position_limit_clip=[0.01])
+        cspace.inplace_reindex(["c", "a"])
+        torch.testing.assert_close(cspace.position_limit_clip, cuda_device_cfg.to_device([0.01, 0.01]))
+
+    def test_position_limit_clip_rejects_mismatched_length(self, cuda_device_cfg):
+        with pytest.raises(ValueError, match="position_limit_clip"):
+            CSpaceParams(joint_names=["a", "b", "c"], device_cfg=cuda_device_cfg,
+                         position_limit_clip=[0.01, 0.02])
+
     def test_cspace_cfg_with_max_acceleration(self, cuda_device_cfg):
         """Test CSpaceParams with max_acceleration parameter."""
         joint_names = ["joint1", "joint2"]

@@ -26,7 +26,52 @@
 namespace curobo::robot::detail {
 
 RrtDiagnostics MotionPlannerRuntime::last_rrt_diagnostics() const {
-  return last_rrt_calls_ > 0 ? rrt_->last_diagnostics() : RrtDiagnostics{};
+  if (last_rrt_calls_ == 0) return {};
+  auto diagnostics = rrt_->last_diagnostics();
+  if (diagnostics.paths_found == 0) return diagnostics;
+
+  const auto seeds = config_.trajectory_optimization.num_seeds;
+  std::vector<int32_t> path_counts(seeds);
+  std::vector<uint8_t> path_success(seeds);
+  CRR_CUDA_CHECK(cudaSetDevice(config_.trajectory_optimization.device_ordinal));
+  CRR_CUDA_CHECK(cudaMemcpy(path_counts.data(), reinterpret_cast<const void*>(rrt_path_count_.ptr()),
+                            path_counts.size() * sizeof(int32_t), cudaMemcpyDeviceToHost));
+  CRR_CUDA_CHECK(cudaMemcpy(path_success.data(), reinterpret_cast<const void*>(rrt_success_.ptr()),
+                            path_success.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost));
+  for (int seed = 0; seed < seeds; ++seed) {
+    if (path_success.at(seed))
+      diagnostics.max_path_points = std::max(diagnostics.max_path_points, path_counts.at(seed));
+  }
+  return diagnostics;
+}
+
+std::vector<std::vector<std::vector<float>>> MotionPlannerRuntime::last_rrt_paths() const {
+  if (last_rrt_calls_ == 0 || rrt_->last_diagnostics().paths_found == 0) return {};
+
+  const int seeds = config_.trajectory_optimization.num_seeds;
+  const int dof = manifest_.num_dof;
+  const int capacity = manifest_.max_rrt_path_nodes;
+  std::vector<int32_t> counts(seeds);
+  std::vector<uint8_t> success(seeds);
+  CRR_CUDA_CHECK(cudaSetDevice(config_.trajectory_optimization.device_ordinal));
+  CRR_CUDA_CHECK(cudaMemcpy(counts.data(), reinterpret_cast<const void*>(rrt_path_count_.ptr()),
+                            counts.size() * sizeof(int32_t), cudaMemcpyDeviceToHost));
+  CRR_CUDA_CHECK(cudaMemcpy(success.data(), reinterpret_cast<const void*>(rrt_success_.ptr()),
+                            success.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost));
+  const auto* points = reinterpret_cast<const float*>(rrt_path_.ptr());
+  std::vector<std::vector<std::vector<float>>> paths;
+  for (int seed = 0; seed < seeds; ++seed) {
+    const int count = counts.at(seed);
+    if (!success.at(seed) || count < 2 || count > capacity) continue;
+    std::vector<float> data(static_cast<size_t>(count) * dof);
+    const size_t offset = static_cast<size_t>(seed) * capacity * dof;
+    CRR_CUDA_CHECK(cudaMemcpy(data.data(), points + offset, data.size() * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+    auto& path = paths.emplace_back();
+    for (int i = 0; i < count; ++i)
+      path.emplace_back(data.begin() + i * dof, data.begin() + (i + 1) * dof);
+  }
+  return paths;
 }
 
 TrajectoryOptimizationCandidates MotionPlannerRuntime::candidates() const {
@@ -46,8 +91,13 @@ const int32_t *MotionPlannerRuntime::validate(const TrajectoryValidationRequest 
 }
 
 void MotionPlannerRuntime::validate_configurations(const float *positions, int count,
-                                            uint8_t *violations, cudaStream_t stream) const {
+                                                   uint8_t *violations, cudaStream_t stream) const {
   trajectory_optimizer_->validate_configurations(positions, count, violations, stream);
+}
+
+void MotionPlannerRuntime::classify_configurations(const float *positions, int count,
+                                                   uint8_t *feasible, cudaStream_t stream) const {
+  rrt_->classify_configurations(positions, count, feasible, stream);
 }
 namespace {
 
@@ -1033,53 +1083,63 @@ void MotionPlannerRuntime::destroy_graph(TrajoptGraph* graph) noexcept {
 
 void MotionPlannerRuntime::destroy_graph_cache(
     TrajoptGraphCache* graph_cache) noexcept {
-  destroy_graph(&graph_cache->direct);
-  destroy_graph(&graph_cache->rrt);
+  destroy_graph(&graph_cache->trajectory);
 }
 
-void MotionPlannerRuntime::optimize_trajectory(
+bool MotionPlannerRuntime::optimize_trajectory(
     const TrajectoryOptimizationRequest& request, TrajoptGraph* graph) const {
   if (!config_.use_cuda_graph) {
     trajectory_optimizer_->optimize(request);
-    return;
-  }
-  if (graph->executable != nullptr && same_graph_request(graph->request, request)) {
-    CRR_CUDA_CHECK(cudaGraphLaunch(graph->executable, request.stream));
-    return;
+    return trajectory_optimizer_->result_succeeded(request);
   }
 
-  destroy_graph(graph);
-  CRR_CUDA_CHECK(cudaStreamSynchronize(request.stream));
-  CRR_CUDA_CHECK(cudaStreamBeginCapture(request.stream, cudaStreamCaptureModeThreadLocal));
-  bool capture_active = true;
-  try {
-    // Capture the same entry point as standalone TrajectoryOptimizer::optimize.
-    // Its conditional nodes own continuation, refinement, and fallback policy.
-    trajectory_optimizer_->optimize(request);
-    CRR_CUDA_CHECK(cudaStreamEndCapture(request.stream, &graph->graph));
-    capture_active = false;
-    CRR_CUDA_CHECK(cudaGraphInstantiate(&graph->executable, graph->graph, 0));
-  } catch (...) {
-    if (capture_active) {
-      cudaGraph_t abandoned_graph = nullptr;
-      cudaStreamEndCapture(request.stream, &abandoned_graph);
-      if (abandoned_graph != nullptr) cudaGraphDestroy(abandoned_graph);
-    }
+  using Clock = std::chrono::steady_clock;
+  const auto milliseconds = [](Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+  };
+  if (graph->executable == nullptr || !same_graph_request(graph->request, request)) {
     destroy_graph(graph);
-    throw;
+    CRR_CUDA_CHECK(cudaStreamSynchronize(request.stream));
+    const auto capture_start = Clock::now();
+    CRR_CUDA_CHECK(cudaStreamBeginCapture(request.stream, cudaStreamCaptureModeThreadLocal));
+    bool capture_active = true;
+    try {
+      // Conditional nodes own continuation, refinement, and fallback.
+      trajectory_optimizer_->optimize(request);
+      CRR_CUDA_CHECK(cudaStreamEndCapture(request.stream, &graph->graph));
+      capture_active = false;
+      CRR_CUDA_CHECK(cudaGraphInstantiate(&graph->executable, graph->graph, 0));
+    } catch (...) {
+      if (capture_active) {
+        cudaGraph_t abandoned_graph = nullptr;
+        cudaStreamEndCapture(request.stream, &abandoned_graph);
+        if (abandoned_graph != nullptr) cudaGraphDestroy(abandoned_graph);
+      }
+      destroy_graph(graph);
+      throw;
+    }
+    graph->request = request;
+    last_trajopt_graph_timing_.capture_ms += milliseconds(capture_start);
+    ++last_trajopt_graph_timing_.captures;
   }
-  graph->request = request;
+  const auto launch_start = Clock::now();
   CRR_CUDA_CHECK(cudaGraphLaunch(graph->executable, request.stream));
+  const bool success = trajectory_optimizer_->result_succeeded(request);
+  last_trajopt_graph_timing_.launch_and_wait_ms += milliseconds(launch_start);
+  ++last_trajopt_graph_timing_.launches;
+  return success;
 }
 
-void MotionPlannerRuntime::plan(const MotionPlanningRequest& request) const {
+void MotionPlannerRuntime::plan(const MotionPlanningRequest& request,
+                                bool reset_rrt_samples) const {
   if (request.outer_iterations <= 0) {
     throw std::invalid_argument("outer_iterations must be positive");
   }
   last_ik_time_seconds_ = 0.0;
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
-  rrt_->reset_seed();
+  last_trajopt_graph_timing_ = {};
+  if (reset_rrt_samples) rrt_->reset_seed();
   if (request.start_position == nullptr || request.goal_position == nullptr ||
       request.optimized_knots == nullptr ||
       request.trajectory_position == nullptr ||
@@ -1250,8 +1310,9 @@ bool MotionPlannerRuntime::plan_impl(
   }
   const auto stream = reinterpret_cast<CUstream>(active_request.stream);
   const auto cuda_stream = active_request.stream;
+  retained_rrt_seed_ = false;
 
-  const auto optimize = [&](TrajoptGraph* graph) {
+  const auto optimize = [&](TrajoptGraph* graph, bool accept_rrt_seed = false) {
     TrajectoryOptimizationRequest trajopt_request;
     trajopt_request.start_position = active_request.start_position;
     trajopt_request.start_velocity = active_request.start_velocity;
@@ -1299,19 +1360,17 @@ bool MotionPlannerRuntime::plan_impl(
       trajopt_request.path_orientation_tolerance =
           active_request.path_orientation_tolerance;
     }
-    optimize_trajectory(trajopt_request, graph);
+    if (accept_rrt_seed) {
+      trajopt_request.seed_valid = reinterpret_cast<const uint8_t*>(rrt_success_.ptr());
+      return trajectory_optimizer_->accept_seed(trajopt_request);
+    }
+    return optimize_trajectory(trajopt_request, graph);
   };
 
   fit_seed_knots(active_request, true, stream);
   if (config_.attempt_direct_trajectory_optimization &&
       active_request.attempt_direct_trajectory_optimization) {
-    optimize(&graph_cache->direct);
-    uint8_t direct_success = 0U;
-    CRR_CUDA_CHECK(cudaMemcpyAsync(&direct_success, active_request.success,
-                                   sizeof(direct_success),
-                                   cudaMemcpyDeviceToHost, cuda_stream));
-    CRR_CUDA_CHECK(cudaStreamSynchronize(cuda_stream));
-    if (direct_success != 0U) {
+    if (optimize(&graph_cache->trajectory)) {
       set_rrt_outputs(active_request, false, stream);
       return true;
     }
@@ -1353,14 +1412,13 @@ bool MotionPlannerRuntime::plan_impl(
   }
 
   fit_rrt_path(active_request, stream);
-  optimize(&graph_cache->rrt);
+  // Both branches use the same graph inputs, with newly fitted knots in place.
+  const bool optimized = optimize(&graph_cache->trajectory);
+  if (!optimized)
+    retained_rrt_seed_ = optimize(nullptr, true);
   set_rrt_outputs(active_request, true, stream);
-  uint8_t success = 0U;
-  CRR_CUDA_CHECK(cudaMemcpyAsync(&success, active_request.success,
-                                 sizeof(success), cudaMemcpyDeviceToHost,
-                                 cuda_stream));
   CRR_CUDA_CHECK(cudaStreamSynchronize(cuda_stream));
-  return success != 0U;
+  return optimized || retained_rrt_seed_;
 }
 
 void MotionPlannerRuntime::plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const {
@@ -1460,6 +1518,7 @@ void MotionPlannerRuntime::plan_pose(const PoseMotionPlanningRequest &request,
   last_ik_time_seconds_ = 0.0;
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
+  last_trajopt_graph_timing_ = {};
   rrt_->reset_seed();
   if (request.goal_positions == nullptr ||
       request.goal_quaternions == nullptr ||
@@ -1813,6 +1872,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
   last_ik_time_seconds_ = 0.0;
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
+  last_trajopt_graph_timing_ = {};
   rrt_->reset_seed();
   if (request.grasp_positions == nullptr ||
       request.grasp_quaternions == nullptr ||

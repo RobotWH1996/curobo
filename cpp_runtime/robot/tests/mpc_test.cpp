@@ -426,6 +426,23 @@ int main(int argc, char **argv) {
     MpcConfig mpc_config;
     mpc_config.trajectory_dt = dt.first();
     MpcController mpc(planner, mpc_config);
+    // Compare the same moving joint goal before and after Cartesian posture tracking.
+    start_jerk.upload(zero.data());
+    mpc.reset(target.data(), knots.data());
+    const auto direct = mpc.step(q.data(), v.data(), a.data(), start_jerk.data(), 0);
+    require(direct.feasible, "Joint-space baseline failed");
+    const auto direct_path = download(direct.position, count);
+    mpc.reset_cartesian(pose.data(), quat.data(), knots.data());
+    mpc.set_joint_tracking(std::vector<float>(initial.begin(), initial.end()),
+                           std::vector<float>(DOF, 12.F), 8.F);
+    mpc.reset(target.data(), knots.data());
+    const auto switched = mpc.step(q.data(), v.data(), a.data(), start_jerk.data(), 0);
+    require(switched.feasible && std::abs(switched.cost - direct.cost) <=
+            1.e-4F * std::max(1.F, std::abs(direct.cost)), "Joint reset retained posture weights");
+    const auto switched_path = download(switched.position, count);
+    for (int i = 0; i < count; ++i)
+      require(std::abs(direct_path[i] - switched_path[i]) < 1.e-4F, "Joint reset changed the trajectory");
+    mpc.reset(target.data(), knots.data());
     const auto phase_timings = mpc.candidate_dts();
     bool early_accept_rejected = false;
     try {

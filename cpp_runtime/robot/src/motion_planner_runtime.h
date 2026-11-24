@@ -36,7 +36,10 @@ class MotionPlannerRuntime final {
   double last_ik_time() const { return last_ik_time_seconds_; }
   double last_rrt_time() const { return last_rrt_time_seconds_; }
   int last_rrt_calls() const { return last_rrt_calls_; }
+  TrajoptGraphTiming last_trajopt_graph_timing() const { return last_trajopt_graph_timing_; }
+  bool retained_rrt_seed() const { return retained_rrt_seed_; }
   RrtDiagnostics last_rrt_diagnostics() const;
+  std::vector<std::vector<std::vector<float>>> last_rrt_paths() const;
   int attachment_sphere_capacity(const std::string& link_name) const;
   void attach_object(const SphereAttachment& attachment);
   void set_link_collision_mask(const std::string& link_name, uint32_t layers);
@@ -44,7 +47,7 @@ class MotionPlannerRuntime final {
   void detach_object(const std::string& link_name);
   void update_link_inertial(const LinkInertialUpdate& update);
   void update_links_inertial(const LinkInertialUpdates& updates) const;
-  void plan(const MotionPlanningRequest& request) const;
+  void plan(const MotionPlanningRequest& request, bool reset_rrt_samples) const;
   void plan_pose(const PoseMotionPlanningRequest &request,
                  const WaypointMotionPlanningRequest *waypoints = nullptr) const;
   void plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const;
@@ -54,6 +57,8 @@ class MotionPlannerRuntime final {
   const int32_t *validate(const TrajectoryValidationRequest &request) const;
   void validate_configurations(const float *positions, int count, uint8_t *violations,
                                cudaStream_t stream = nullptr) const;
+  void classify_configurations(const float *positions, int count, uint8_t *feasible,
+                               cudaStream_t stream) const;
   std::unique_ptr<InverseKinematics> create_inverse_kinematics(
       const InverseKinematicsConfig& config) const;
   GraspPlanningStatus plan_grasp(const GraspPlanningRequest& request) const;
@@ -67,8 +72,7 @@ class MotionPlannerRuntime final {
   };
 
   struct TrajoptGraphCache final {
-    TrajoptGraph direct{};
-    TrajoptGraph rrt{};
+    TrajoptGraph trajectory{};
   };
 
   void validate_config() const;
@@ -106,7 +110,7 @@ class MotionPlannerRuntime final {
   GraspPhaseOutput grasp_phase_workspace() const;
   void copy_grasp_phase_output(const GraspPhaseOutput& output,
                                cudaStream_t stream) const;
-  void optimize_trajectory(const TrajectoryOptimizationRequest& request,
+  bool optimize_trajectory(const TrajectoryOptimizationRequest& request,
                            TrajoptGraph* graph) const;
   static bool same_graph_request(const TrajectoryOptimizationRequest& left,
                                  const TrajectoryOptimizationRequest& right);
@@ -191,6 +195,8 @@ class MotionPlannerRuntime final {
   mutable double last_ik_time_seconds_{0.0};
   mutable double last_rrt_time_seconds_{0.0};
   mutable int last_rrt_calls_{0};
+  mutable TrajoptGraphTiming last_trajopt_graph_timing_;
+  mutable bool retained_rrt_seed_{false};
   mutable TrajoptGraphCache default_trajopt_graphs_;
   mutable TrajoptGraphCache goalset_trajopt_graphs_;
   mutable TrajoptGraphCache grasp_approach_trajopt_graphs_;

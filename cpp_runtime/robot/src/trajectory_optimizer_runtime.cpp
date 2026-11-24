@@ -1315,7 +1315,7 @@ void TrajectoryOptimizerRuntime::launch_pose(
 }
 
 void TrajectoryOptimizerRuntime::launch_world_collision(
-    int trajectories, CUstream stream) const {
+    int trajectories, CUstream stream, bool use_metrics) const {
   const int states = trajectories * manifest_.trajectory_steps;
   if (scene_ == nullptr) {
     CRR_CUDA_CHECK(cudaMemsetAsync(
@@ -1329,6 +1329,10 @@ void TrajectoryOptimizerRuntime::launch_world_collision(
     return;
   }
   const auto view = scene_->device_view();
+  const auto weight =
+      use_metrics ? metrics_world_collision_weight_.ptr() : world_collision_weight_.ptr();
+  const auto activation = use_metrics ? metrics_collision_activation_distance_.ptr()
+                                      : collision_activation_distance_.ptr();
   bool overwrite = true;
   const auto launch =
       [&](int capacity, const auto& obstacle_data, CUdeviceptr layers,
@@ -1340,7 +1344,7 @@ void TrajectoryOptimizerRuntime::launch_world_collision(
         launch_swept_collision(
             kernel, kernel_manifest, obstacle_data, layers,
             collision_->sphere_collision_mask.ptr(), robot_spheres_.ptr(),
-            world_collision_weight_.ptr(), collision_activation_distance_.ptr(),
+            weight, activation,
             state_dt_.ptr(), scene_indices_.ptr(), world_collision_cost_.ptr(),
             world_collision_gradient_.ptr(), trajectories,
             manifest_.trajectory_steps, manifest_.num_spheres, overwrite,
@@ -1391,8 +1395,10 @@ void TrajectoryOptimizerRuntime::launch_metrics_collisions(
   streams->record(RolloutEvent::STATE_READY, primary);
   streams->wait(world, RolloutEvent::STATE_READY);
   streams->wait(self, RolloutEvent::STATE_READY);
-  launch_metrics_world_collision(
-      trajectories, streams->driver_stream(RolloutStream::WORLD));
+  // MPC uses swept acceptance at physical contact. Run it alongside self
+  // collision instead of computing a discrete result that would be overwritten.
+  launch_world_collision(trajectories, streams->driver_stream(RolloutStream::WORLD),
+                         /*use_metrics=*/true);
   streams->record(RolloutEvent::WORLD_DONE, world);
   launch_self_collision_to(
       trajectories, manifest_.trajectory_steps, robot_spheres_.ptr(),
@@ -2856,10 +2862,30 @@ void TrajectoryOptimizerRuntime::run_optimization_pass(const TrajectoryOptimizat
   // Moving boundary controls depend on dt. Re-evaluate their required timing
   // after the first update before using that spline as a fixed TimeOpt path.
   if (timeopt_) compute_required_dt(best_action_.ptr(), 1.0F, request, stream);
+  evaluate_candidate(best_action_.ptr(), request, stream);
+}
+
+void TrajectoryOptimizerRuntime::evaluate_candidate(
+    CUdeviceptr knots, const TrajectoryOptimizationRequest& request, CUstream stream) const {
   // Validation and retention consume costs and states, not joint gradients.
-  evaluate(best_action_.ptr(), config_.num_seeds, search_costs_.ptr(), 0, request, stream);
+  evaluate(knots, config_.num_seeds, search_costs_.ptr(), 0, request, stream);
   launch_metrics_world_collision(config_.num_seeds, stream);
-  validate_interpolated(best_action_.ptr(), stream);
+  validate_interpolated(knots, stream);
+}
+
+bool TrajectoryOptimizerRuntime::accept_seed(const TrajectoryOptimizationRequest& request) const {
+  const auto stream = reinterpret_cast<CUstream>(request.stream);
+  begin_optimization(request);
+  const size_t bytes = static_cast<size_t>(config_.num_seeds) *
+                       manifest_.num_knots * manifest_.num_dof * sizeof(float);
+  CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(best_action_.ptr()),
+                                reinterpret_cast<const void*>(seed_actions_.ptr()),
+                                bytes, cudaMemcpyDeviceToDevice, request.stream));
+  evaluate_candidate(best_action_.ptr(), request, stream);
+  accumulate_optimization_pass(true, request);
+  if (!base_pass_succeeded(request.stream)) return false;
+  finish_optimization(request);
+  return result_succeeded(request);
 }
 
 void TrajectoryOptimizerRuntime::accumulate_optimization_pass(
