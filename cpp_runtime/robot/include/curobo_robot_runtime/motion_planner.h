@@ -104,7 +104,8 @@ struct MotionPlanningRequest {
   bool track_orientation{true};
   float final_position_tolerance{-1.0F};
   float final_orientation_tolerance{-1.0F};
-  /** Maximum initial solve/check passes per TrajOpt solve (50 iterations per pass by default). */
+  /** Maximum initial solve/check passes per TrajOpt solve. -1 uses the exact configured
+   * TrajOpt max_iterations budget, including a partial final check interval. */
   int outer_iterations{1};
 };
 
@@ -386,6 +387,13 @@ class MotionPlanner final {
   /** Retry planning using the next samples in the RRT sample bank. */
   void plan_with_next_rrt_samples(const MotionPlanningRequest& request) const;
 
+  /** Run synchronous planning and require a successful TrajOpt result.
+   * RRT paths can seed TrajOpt. Pass false for reset_rrt_samples to retry with
+   * the next samples in the RRT sample bank.
+   */
+  void plan_optimized(const MotionPlanningRequest& request,
+                      bool reset_rrt_samples = true) const;
+
   /** Run single-pose IK followed by fitted TrajOpt and optional RRT fallback. */
   void plan_pose(const PoseMotionPlanningRequest& request) const;
   /** Follow Cartesian waypoints using terminal IK and the fixed spline optimizer. */
@@ -396,6 +404,8 @@ class MotionPlanner final {
 
   /** Borrow executable states and timing controls selected inside the retry loop. */
   TimeOptTrajectory timeopt_trajectory() const;
+  /** Report whether the last TimeOpt pass rejected any seed for exceeding interpolation_buffer_size. */
+  TimeOptCapacityDiagnostics last_timeopt_capacity_diagnostics() const;
   void set_execution_speed_scale(float scale);
 
   /** Validate sampled states using this planner's model, scene, and streams. */

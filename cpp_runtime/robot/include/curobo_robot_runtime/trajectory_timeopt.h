@@ -95,6 +95,8 @@ class TrajectoryTimeOpt final {
 
  private:
   friend class detail::TrajectoryOptimizerRuntime;
+  /** Sample a prefix of each full-stride input row into compact output rows. */
+  TrajectoryTimeOptSamples sample_prefix(const float *times, int samples, cudaStream_t stream) const;
   const float *sample_progress() const;
   /** Borrow the owning optimizer's dynamics model and kernel modules. */
   TrajectoryTimeOpt(const std::string& artifact_directory,

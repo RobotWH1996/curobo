@@ -47,12 +47,14 @@ class MotionPlannerRuntime final {
   void detach_object(const std::string& link_name);
   void update_link_inertial(const LinkInertialUpdate& update);
   void update_links_inertial(const LinkInertialUpdates& updates) const;
-  void plan(const MotionPlanningRequest& request, bool reset_rrt_samples) const;
+  void plan(const MotionPlanningRequest& request, bool reset_rrt_samples,
+            bool allow_retained_rrt_seed = true) const;
   void plan_pose(const PoseMotionPlanningRequest &request,
                  const WaypointMotionPlanningRequest *waypoints = nullptr) const;
   void plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const;
   TrajectoryOptimizationCandidates candidates() const;
   TimeOptTrajectory timeopt_trajectory() const;
+  TimeOptCapacityDiagnostics last_timeopt_capacity_diagnostics() const;
   void set_execution_speed_scale(float scale);
   const int32_t *validate(const TrajectoryValidationRequest &request) const;
   void validate_configurations(const float *positions, int count, uint8_t *violations,
@@ -84,7 +86,8 @@ class MotionPlannerRuntime final {
                       bool use_linear_path, CUstream stream) const;
   bool plan_impl(const MotionPlanningRequest& request,
                  bool activate_repaired_seeds,
-                 TrajoptGraphCache* graph_cache) const;
+                 TrajoptGraphCache* graph_cache,
+                 bool allow_retained_rrt_seed = true) const;
   void plan_pose_impl(const PoseMotionPlanningRequest &request, TrajoptGraphCache *graph_cache,
                       const WaypointMotionPlanningRequest *waypoints = nullptr) const;
   void set_rrt_outputs(const MotionPlanningRequest& request, bool used_rrt,
@@ -196,6 +199,7 @@ class MotionPlannerRuntime final {
   mutable double last_rrt_time_seconds_{0.0};
   mutable int last_rrt_calls_{0};
   mutable TrajoptGraphTiming last_trajopt_graph_timing_;
+  mutable bool ran_trajopt_{false};
   mutable bool retained_rrt_seed_{false};
   mutable TrajoptGraphCache default_trajopt_graphs_;
   mutable TrajoptGraphCache goalset_trajopt_graphs_;

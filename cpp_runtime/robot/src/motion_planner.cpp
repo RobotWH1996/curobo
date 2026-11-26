@@ -15,6 +15,10 @@ TrajectoryOptimizationCandidates MotionPlanner::candidates() const {
 TimeOptTrajectory MotionPlanner::timeopt_trajectory() const {
   return runtime_->timeopt_trajectory();
 }
+
+TimeOptCapacityDiagnostics MotionPlanner::last_timeopt_capacity_diagnostics() const {
+  return runtime_->last_timeopt_capacity_diagnostics();
+}
 void MotionPlanner::set_execution_speed_scale(float scale) {
   runtime_->set_execution_speed_scale(scale);
 }
@@ -129,6 +133,11 @@ void MotionPlanner::plan(const MotionPlanningRequest& request) const {
 void MotionPlanner::plan_with_next_rrt_samples(
     const MotionPlanningRequest& request) const {
   runtime_->plan(request, /*reset_rrt_samples=*/false);
+}
+
+void MotionPlanner::plan_optimized(const MotionPlanningRequest& request,
+                                  bool reset_rrt_samples) const {
+  runtime_->plan(request, reset_rrt_samples, /*allow_retained_rrt_seed=*/false);
 }
 
 void MotionPlanner::plan_pose(

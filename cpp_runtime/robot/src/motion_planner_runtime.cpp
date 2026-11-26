@@ -81,6 +81,14 @@ TrajectoryOptimizationCandidates MotionPlannerRuntime::candidates() const {
 TimeOptTrajectory MotionPlannerRuntime::timeopt_trajectory() const {
   return trajectory_optimizer_->timeopt_trajectory();
 }
+
+TimeOptCapacityDiagnostics MotionPlannerRuntime::last_timeopt_capacity_diagnostics() const {
+  if (!ran_trajopt_) {
+    return TimeOptCapacityDiagnostics{
+        trajectory_optimizer_->info().interpolation_buffer_size, 0, 0, 0.0F};
+  }
+  return trajectory_optimizer_->last_timeopt_capacity_diagnostics();
+}
 void MotionPlannerRuntime::set_execution_speed_scale(float scale) {
   trajectory_optimizer_->set_execution_speed_scale(scale);
   config_.trajectory_optimization.execution_speed_scale = scale;
@@ -1090,6 +1098,7 @@ void MotionPlannerRuntime::destroy_graph_cache(
 
 bool MotionPlannerRuntime::optimize_trajectory(
     const TrajectoryOptimizationRequest& request, TrajoptGraph* graph) const {
+  ran_trajopt_ = true;
   if (!config_.use_cuda_graph) {
     trajectory_optimizer_->optimize(request);
     return trajectory_optimizer_->result_succeeded(request);
@@ -1133,14 +1142,16 @@ bool MotionPlannerRuntime::optimize_trajectory(
 }
 
 void MotionPlannerRuntime::plan(const MotionPlanningRequest& request,
-                                bool reset_rrt_samples) const {
-  if (request.outer_iterations <= 0) {
-    throw std::invalid_argument("outer_iterations must be positive");
+                                bool reset_rrt_samples,
+                                bool allow_retained_rrt_seed) const {
+  if (request.outer_iterations <= 0 && request.outer_iterations != -1) {
+    throw std::invalid_argument("outer_iterations must be positive or -1 to use max_iterations");
   }
   last_ik_time_seconds_ = 0.0;
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
   last_trajopt_graph_timing_ = {};
+  ran_trajopt_ = false;
   if (reset_rrt_samples) rrt_->reset_seed();
   if (request.start_position == nullptr || request.goal_position == nullptr ||
       request.optimized_knots == nullptr ||
@@ -1251,7 +1262,8 @@ void MotionPlannerRuntime::plan(const MotionPlanningRequest& request,
   stable_request.selected_seed =
       reinterpret_cast<int32_t*>(staged_selected_seed_.ptr());
   stable_request.stream = stream;
-  plan_impl(stable_request, false, &default_trajopt_graphs_);
+  plan_impl(stable_request, false, &default_trajopt_graphs_,
+            allow_retained_rrt_seed);
 
   const auto trajectory_values =
       static_cast<size_t>(manifest_.trajectory_steps) * dof;
@@ -1291,7 +1303,8 @@ void MotionPlannerRuntime::plan(const MotionPlanningRequest& request,
 bool MotionPlannerRuntime::plan_impl(
     const MotionPlanningRequest& request,
     bool activate_repaired_seeds,
-    TrajoptGraphCache* graph_cache) const {
+    TrajoptGraphCache* graph_cache,
+    bool allow_retained_rrt_seed) const {
   CRR_CUDA_CHECK(
       cudaSetDevice(config_.trajectory_optimization.device_ordinal));
   if (request.start_position == nullptr || request.goal_position == nullptr ||
@@ -1416,7 +1429,7 @@ bool MotionPlannerRuntime::plan_impl(
   fit_rrt_path(active_request, stream);
   // Both branches use the same graph inputs, with newly fitted knots in place.
   const bool optimized = optimize(&graph_cache->trajectory);
-  if (!optimized)
+  if (!optimized && allow_retained_rrt_seed)
     retained_rrt_seed_ = optimize(nullptr, true);
   set_rrt_outputs(active_request, true, stream);
   CRR_CUDA_CHECK(cudaStreamSynchronize(cuda_stream));
@@ -1521,6 +1534,7 @@ void MotionPlannerRuntime::plan_pose(const PoseMotionPlanningRequest &request,
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
   last_trajopt_graph_timing_ = {};
+  ran_trajopt_ = false;
   rrt_->reset_seed();
   if (request.goal_positions == nullptr ||
       request.goal_quaternions == nullptr ||
@@ -1875,6 +1889,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
   last_trajopt_graph_timing_ = {};
+  ran_trajopt_ = false;
   rrt_->reset_seed();
   if (request.grasp_positions == nullptr ||
       request.grasp_quaternions == nullptr ||

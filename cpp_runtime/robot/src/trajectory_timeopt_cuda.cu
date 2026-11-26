@@ -67,19 +67,29 @@ __global__ void prepare_boundaries(
 
 __global__ void prepare_times(const float* duration, int batch, int capacity,
                               float interpolation_dt, float* times, float* dt,
-                              int32_t* counts) {
+                              int32_t* counts, const uint8_t* timeopt_success,
+                              const uint8_t* seed_valid, const uint8_t* pose_valid,
+                              TimeOptOverflowSample* overflow) {
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= batch * capacity) return;
   const int seed = index / capacity, sample = index % capacity;
   const float value = duration[seed];
   const float intervals = fmaxf(ceilf(value / interpolation_dt), 1.0F);
-  const bool fits = isfinite(value) && value >= 0.0F && intervals < capacity;
+  const bool duration_valid = isfinite(value) && value >= 0.0F;
+  const bool fits = duration_valid && intervals < capacity;
   const int safe_intervals = fits ? static_cast<int>(intervals) : capacity - 1;
   const float sample_dt = isfinite(value) ? value / safe_intervals : 0.0F;
   times[index] = sample * sample_dt;
   if (sample == 0) {
     dt[seed] = sample_dt;
     counts[seed] = fits ? safe_intervals + 1 : 0;
+    TimeOptOverflowSample report{};
+    if (!fits && duration_valid && timeopt_success[seed] && seed_valid[seed] && pose_valid[seed]) {
+      report.required_samples = intervals >= static_cast<float>(INT32_MAX)
+          ? INT32_MAX : static_cast<int32_t>(intervals) + 1;
+      report.duration_sec = value;
+    }
+    overflow[seed] = report;
   }
 }
 
@@ -99,7 +109,7 @@ __global__ void gather_timeopt(
     TrajectoryTimeOptSamples samples, const float* timing_controls,
     const float* dt, const float* duration,
     const int32_t* counts, const int32_t* selected_seed, const uint8_t* success,
-    int capacity, int dof, float* states, float* metadata, int32_t* count,
+    int capacity, int sample_horizon, int dof, float* states, float* metadata, int32_t* count,
     float* selected_timing_controls) {
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
   const int values = capacity * dof;
@@ -120,7 +130,11 @@ __global__ void gather_timeopt(
     }
     return;
   }
-  const int source = seed * values + index;
+  const int sample_values = sample_horizon * dof;
+  int sample_index = index;
+  // A compact row includes a stationary endpoint sample for its unused tail.
+  if (sample_index >= sample_values) sample_index = sample_values - dof + index % dof;
+  const int source = seed * sample_values + sample_index;
   states[index] = samples.position[source];
   states[values + index] = samples.velocity[source];
   states[2 * values + index] = samples.acceleration[source];
@@ -160,9 +174,12 @@ cudaError_t launch_timeopt_spatial_output(
 
 cudaError_t launch_timeopt_times(const float* duration, int batch, int capacity,
                                  float interpolation_dt, float* times, float* dt,
-                                 int32_t* counts, cudaStream_t stream) {
+                                 int32_t* counts, const uint8_t* timeopt_success,
+                                 const uint8_t* seed_valid, const uint8_t* pose_valid,
+                                 TimeOptOverflowSample* overflow, cudaStream_t stream) {
   prepare_times<<<(batch * capacity + 255) / 256, 256, 0, stream>>>(
-      duration, batch, capacity, interpolation_dt, times, dt, counts);
+      duration, batch, capacity, interpolation_dt, times, dt, counts, timeopt_success,
+      seed_valid, pose_valid, overflow);
   return cudaGetLastError();
 }
 
@@ -181,10 +198,20 @@ cudaError_t launch_timeopt_output(
     const int32_t* counts, const int32_t* selected_seed, const uint8_t* success,
     int capacity, int dof, float* states, float* metadata, int32_t* count,
     float* selected_timing_controls, cudaStream_t stream) {
+  return launch_timeopt_output(samples, timing_controls, dt, duration, counts, selected_seed,
+      success, capacity, capacity, dof, states, metadata, count, selected_timing_controls, stream);
+}
+
+cudaError_t launch_timeopt_output(
+    TrajectoryTimeOptSamples samples, const float* timing_controls,
+    const float* dt, const float* duration,
+    const int32_t* counts, const int32_t* selected_seed, const uint8_t* success,
+    int capacity, int sample_horizon, int dof, float* states, float* metadata,
+    int32_t* count, float* selected_timing_controls, cudaStream_t stream) {
   const int values = std::max(capacity * dof, TIMEOPT_CONTROL_COUNT);
   gather_timeopt<<<(values + 255) / 256, 256, 0, stream>>>(
-      samples, timing_controls, dt, duration, counts, selected_seed, success, capacity, dof,
-      states, metadata, count, selected_timing_controls);
+      samples, timing_controls, dt, duration, counts, selected_seed, success, capacity,
+      sample_horizon, dof, states, metadata, count, selected_timing_controls);
   return cudaGetLastError();
 }
 

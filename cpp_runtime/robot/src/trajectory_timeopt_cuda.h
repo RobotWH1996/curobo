@@ -51,9 +51,16 @@ cudaError_t launch_timeopt_spatial_output(
     const float* controls, const float* boundaries, const float* knot_dt,
     const int32_t* selected_seed, const uint8_t* success, int batch, int knots,
     int dof, float* output, cudaStream_t stream);
+struct TimeOptOverflowSample {
+  int32_t required_samples;
+  float duration_sec;
+};
+
 cudaError_t launch_timeopt_times(const float* duration, int batch, int capacity,
                                  float interpolation_dt, float* times, float* dt,
-                                 int32_t* counts, cudaStream_t stream);
+                                 int32_t* counts, const uint8_t* timeopt_success,
+                                 const uint8_t* seed_valid, const uint8_t* pose_valid,
+                                 TimeOptOverflowSample* overflow, cudaStream_t stream);
 cudaError_t launch_timeopt_rank(
     const uint8_t* timeopt_success, const int32_t* violation,
     const int32_t* counts, const uint8_t* seed_valid, const uint8_t* pose_valid,
@@ -65,4 +72,10 @@ cudaError_t launch_timeopt_output(
     const int32_t* counts, const int32_t* selected_seed, const uint8_t* success,
     int capacity, int dof, float* states, float* metadata, int32_t* count,
     float* selected_timing_controls, cudaStream_t stream);
+cudaError_t launch_timeopt_output(
+    TrajectoryTimeOptSamples samples, const float* timing_controls,
+    const float* dt, const float* duration,
+    const int32_t* counts, const int32_t* selected_seed, const uint8_t* success,
+    int capacity, int sample_horizon, int dof, float* states, float* metadata,
+    int32_t* count, float* selected_timing_controls, cudaStream_t stream);
 }  // namespace curobo::robot::detail

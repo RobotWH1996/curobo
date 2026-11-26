@@ -27,6 +27,63 @@
 namespace curobo::robot::detail {
 namespace {
 
+constexpr int COMPACT_DENSE_HORIZON = 512;
+
+struct CaptureDependencies {
+  cudaGraph_t graph = nullptr;
+  const cudaGraphNode_t *nodes = nullptr;
+  size_t count = 0;
+};
+
+CaptureDependencies capture_dependencies(cudaStream_t stream) {
+  cudaStreamCaptureStatus status;
+  CaptureDependencies capture;
+#if CUDART_VERSION >= 13000
+  CRR_CUDA_CHECK(cudaStreamGetCaptureInfo(stream, &status, nullptr, &capture.graph,
+                                         &capture.nodes, nullptr, &capture.count));
+#else
+  CRR_CUDA_CHECK(cudaStreamGetCaptureInfo_v2(stream, &status, nullptr, &capture.graph,
+                                            &capture.nodes, &capture.count));
+#endif
+  return capture;
+}
+
+void capture_conditional_body(cudaStream_t stream, cudaStream_t body_stream,
+                              cudaGraphConditionalHandle handle,
+                              const std::function<void(cudaStream_t)> &enqueue) {
+  const auto capture = capture_dependencies(stream);
+  cudaGraphNodeParams parameters{};
+  parameters.type = cudaGraphNodeTypeConditional;
+  parameters.conditional.handle = handle;
+  parameters.conditional.type = cudaGraphCondTypeIf;
+  parameters.conditional.size = 1;
+  cudaGraphNode_t node;
+#if CUDART_VERSION >= 13000
+  CRR_CUDA_CHECK(cudaGraphAddNode(&node, capture.graph, capture.nodes, nullptr,
+                                capture.count, &parameters));
+#else
+  CRR_CUDA_CHECK(cudaGraphAddNode(&node, capture.graph, capture.nodes, capture.count, &parameters));
+#endif
+  CRR_CUDA_CHECK(cudaStreamBeginCaptureToGraph(body_stream, parameters.conditional.phGraph_out[0],
+                                               nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
+  try {
+    enqueue(body_stream);
+    cudaGraph_t body = nullptr;
+    CRR_CUDA_CHECK(cudaStreamEndCapture(body_stream, &body));
+  } catch (...) {
+    cudaGraph_t abandoned = nullptr;
+    cudaStreamEndCapture(body_stream, &abandoned);
+    throw;
+  }
+#if CUDART_VERSION >= 13000
+  CRR_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(stream, &node, nullptr, 1,
+                                                     cudaStreamSetCaptureDependencies));
+#else
+  CRR_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(stream, &node, 1,
+                                                     cudaStreamSetCaptureDependencies));
+#endif
+}
+
 size_t checked_product(size_t left, size_t right, const char* description) {
   if (right != 0 && left > std::numeric_limits<size_t>::max() / right) {
     throw std::invalid_argument(std::string(description) + " size overflow");
@@ -294,6 +351,8 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
     timeopt_times_.allocate(batch * capacity * sizeof(float));
     timeopt_dt_.allocate(batch * sizeof(float));
     timeopt_counts_.allocate(batch * sizeof(int32_t));
+    timeopt_overflow_.allocate(batch * sizeof(TimeOptOverflowSample));
+    timeopt_overflow_.clear();
     timeopt_states_.allocate(4 * capacity * dof * sizeof(float));
     timeopt_metadata_.allocate(2 * sizeof(float));
     timeopt_count_.allocate(sizeof(int32_t));
@@ -306,6 +365,18 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
     execution_speed_scale_.allocate(sizeof(float));
     set_execution_speed_scale(config_.execution_speed_scale);
   }
+#if CUDART_VERSION >= 12060
+  if (manifest_.interpolation_buffer_size > COMPACT_DENSE_HORIZON) {
+    int driver_version = 0;
+    CRR_CUDA_CHECK(cudaDriverGetVersion(&driver_version));
+    if (driver_version >= 12060) {
+      dense_rollout_streams_ = std::make_unique<RolloutStreams>();
+      cudaStream_t stream = nullptr;
+      CRR_CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+      dense_stream_.reset(stream);
+    }
+  }
+#endif
   CRR_CUDA_CHECK(cudaStreamCreateWithFlags(&conditional_stream_, cudaStreamNonBlocking));
 }
 
@@ -1795,7 +1866,9 @@ void TrajectoryOptimizerRuntime::launch_bspline_backward(
 RolloutStreams* TrajectoryOptimizerRuntime::rollout_streams(CUstream stream) const {
   // Parent streams remain in the outer capture even after joining. Conditional
   // bodies need separate streams/events; reuse them after each body ends capture.
-  return reinterpret_cast<cudaStream_t>(stream) == conditional_stream_
+  const auto primary = reinterpret_cast<cudaStream_t>(stream);
+  if (dense_stream_ && primary == dense_stream_.get()) return dense_rollout_streams_.get();
+  return primary == conditional_stream_
              ? conditional_rollout_streams_.get()
              : rollout_streams_.get();
 }
@@ -2174,8 +2247,10 @@ TrajectoryOptimizationCandidates TrajectoryOptimizerRuntime::candidates() const 
 
 const int32_t *TrajectoryOptimizerRuntime::validate(
     const TrajectoryValidationRequest &request, bool timeopt) const {
+  const int capacity = manifest_.interpolation_buffer_size;
   if (!request.position || !request.velocity || !request.acceleration || !request.jerk ||
-      request.num_samples != manifest_.interpolation_buffer_size) {
+      (timeopt ? request.num_samples <= 0 || request.num_samples > capacity
+               : request.num_samples != capacity)) {
     throw std::invalid_argument("validation requires fixed-shape position and derivatives");
   }
   CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
@@ -2189,7 +2264,7 @@ const int32_t *TrajectoryOptimizerRuntime::validate(
   copy(validation_velocity_.ptr(), request.velocity);
   copy(validation_acceleration_.ptr(), request.acceleration);
   copy(validation_jerk_.ptr(), request.jerk);
-  validate_states(reinterpret_cast<CUstream>(request.stream), timeopt, timeopt);
+  validate_states(reinterpret_cast<CUstream>(request.stream), request.num_samples, timeopt, timeopt);
   return reinterpret_cast<const int32_t *>(validation_violation_.ptr());
 }
 
@@ -2205,7 +2280,7 @@ void TrajectoryOptimizerRuntime::validate_configurations(
     CRR_CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void *>(validation_velocity_.ptr()), 0, bytes, stream));
     CRR_CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void *>(validation_acceleration_.ptr()), 0, bytes, stream));
   }
-  validate_states(reinterpret_cast<CUstream>(stream), false, false, count, violations);
+  validate_states(reinterpret_cast<CUstream>(stream), count, false, false, violations);
 }
 
 void TrajectoryOptimizerRuntime::validate_interpolated(
@@ -2236,6 +2311,14 @@ void TrajectoryOptimizerRuntime::validate_interpolated(
           manifest_.calculate_interpolation_horizon.shared_memory),
       stream, horizon_arguments);
 
+  with_dense_horizon(stream, reinterpret_cast<const int32_t *>(interpolation_horizon_.ptr()),
+      [&](CUstream active_stream, int horizon) {
+        validate_interpolated_for_horizon(knots, active_stream, horizon);
+      });
+}
+
+void TrajectoryOptimizerRuntime::validate_interpolated_for_horizon(
+    CUdeviceptr knots, CUstream stream, int horizon) const {
   CUdeviceptr output_position = validation_position_.ptr();
   CUdeviceptr output_velocity = validation_velocity_.ptr();
   CUdeviceptr output_acceleration = validation_acceleration_.ptr();
@@ -2253,7 +2336,7 @@ void TrajectoryOptimizerRuntime::validate_interpolated(
   CUdeviceptr implicit_goal = implicit_goal_.ptr();
   CUdeviceptr interpolation_horizon_pointer = interpolation_horizon_.ptr();
   int batch_size = config_.num_seeds;
-  int validation_horizon = manifest_.interpolation_buffer_size;
+  int validation_horizon = horizon;
   int dof = manifest_.num_dof;
   int n_knots = manifest_.num_knots;
   std::vector<void*> interpolation_arguments{
@@ -2290,17 +2373,14 @@ void TrajectoryOptimizerRuntime::validate_interpolated(
       static_cast<unsigned int>(manifest_.bspline_single_dt.shared_memory),
       stream, interpolation_arguments);
 
-  validate_states(stream);
+  validate_states(stream, horizon, false, true);
 }
 
-void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
+void TrajectoryOptimizerRuntime::validate_states(CUstream stream, int validation_horizon, bool timeopt,
                                                  bool check_tool_path,
-                                                 int configuration_count,
                                                  uint8_t *configuration_violations) const {
   const bool check_effort = config_.check_effort_limits || timeopt;
-  const int seeds = configuration_count ? 1 : config_.num_seeds;
-  const int validation_horizon = configuration_count ? configuration_count
-                                                      : manifest_.interpolation_buffer_size;
+  const int seeds = configuration_violations ? 1 : config_.num_seeds;
   auto* streams = rollout_streams(stream);
   const auto primary = reinterpret_cast<cudaStream_t>(stream);
   const auto driver = [&](RolloutStream role) {
@@ -2359,12 +2439,12 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
   const auto data = [](const auto &buffer) { return reinterpret_cast<const float *>(buffer.ptr()); };
   const float *effort_bounds = (check_effort && rollout_ != nullptr)
       ? reinterpret_cast<const float *>(rollout_->effort_bounds()) : nullptr;
-  if (configuration_count) {
+  if (configuration_violations) {
     CRR_CUDA_CHECK(launch_validate_configurations(
         data(validation_position_), data(validation_world_collision_cost_),
         data(validation_self_collision_cost_), data(position_bounds_), data(velocity_bounds_),
         data(acceleration_bounds_), data(jerk_bounds_), data(validation_joint_effort_),
-        effort_bounds, config_.constraint_tolerance, configuration_count, manifest_.num_dof,
+        effort_bounds, config_.constraint_tolerance, validation_horizon, manifest_.num_dof,
         configuration_violations, primary));
     return;
   }
@@ -2918,59 +2998,42 @@ void TrajectoryOptimizerRuntime::restore_initial_pass(
 void TrajectoryOptimizerRuntime::enqueue_conditional(
     const TrajectoryOptimizationRequest &request, OptimizationCondition condition,
     const std::function<void(cudaStream_t)> &enqueue) const {
-  cudaStreamCaptureStatus status;
-  cudaGraph_t graph = nullptr;
-  const cudaGraphNode_t *dependencies = nullptr;
-  size_t count = 0;
-#if CUDART_VERSION >= 13000
-  CRR_CUDA_CHECK(cudaStreamGetCaptureInfo(request.stream, &status, nullptr, &graph, &dependencies,
-                                          nullptr, &count));
-#else
-  CRR_CUDA_CHECK(
-      cudaStreamGetCaptureInfo_v2(request.stream, &status, nullptr, &graph, &dependencies, &count));
-#endif
+  const auto graph = capture_dependencies(request.stream).graph;
   cudaGraphConditionalHandle handle;
   CRR_CUDA_CHECK(cudaGraphConditionalHandleCreate(&handle, graph, 0, 0));
   CRR_CUDA_CHECK(launch_optimization_condition(
       handle, reinterpret_cast<const int32_t *>(finetune_enabled_.ptr()), request.success,
       condition, request.stream));
-#if CUDART_VERSION >= 13000
-  CRR_CUDA_CHECK(cudaStreamGetCaptureInfo(request.stream, &status, nullptr, &graph, &dependencies,
-                                          nullptr, &count));
-#else
-  CRR_CUDA_CHECK(
-      cudaStreamGetCaptureInfo_v2(request.stream, &status, nullptr, &graph, &dependencies, &count));
-#endif
-  cudaGraphNodeParams parameters{};
-  parameters.type = cudaGraphNodeTypeConditional;
-  parameters.conditional.handle = handle;
-  parameters.conditional.type = cudaGraphCondTypeIf;
-  parameters.conditional.size = 1;
-  cudaGraphNode_t node;
-#if CUDART_VERSION >= 13000
-  CRR_CUDA_CHECK(cudaGraphAddNode(&node, graph, dependencies, nullptr, count, &parameters));
-#else
-  CRR_CUDA_CHECK(cudaGraphAddNode(&node, graph, dependencies, count, &parameters));
-#endif
-  CRR_CUDA_CHECK(cudaStreamBeginCaptureToGraph(conditional_stream_,
-                                               parameters.conditional.phGraph_out[0], nullptr,
-                                               nullptr, 0, cudaStreamCaptureModeThreadLocal));
-  try {
-    enqueue(conditional_stream_);
-    cudaGraph_t body = nullptr;
-    CRR_CUDA_CHECK(cudaStreamEndCapture(conditional_stream_, &body));
-  } catch (...) {
-    cudaGraph_t abandoned = nullptr;
-    cudaStreamEndCapture(conditional_stream_, &abandoned);
-    throw;
+  capture_conditional_body(request.stream, conditional_stream_, handle, enqueue);
+}
+
+void TrajectoryOptimizerRuntime::with_dense_horizon(
+    CUstream stream, const int32_t *counts,
+    const std::function<void(CUstream, int)> &enqueue) const {
+  const int capacity = manifest_.interpolation_buffer_size;
+  const auto primary = reinterpret_cast<cudaStream_t>(stream);
+  cudaStreamCaptureStatus status = cudaStreamCaptureStatusNone;
+  if (dense_stream_ && primary)
+    CRR_CUDA_CHECK(cudaStreamIsCapturing(primary, &status));
+  if (status != cudaStreamCaptureStatusActive) {
+    enqueue(stream, capacity);
+    return;
   }
-#if CUDART_VERSION >= 13000
-  CRR_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(request.stream, &node, nullptr, 1,
-                                                     cudaStreamSetCaptureDependencies));
-#else
-  CRR_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(request.stream, &node, 1,
-                                                     cudaStreamSetCaptureDependencies));
-#endif
+
+  const auto graph = capture_dependencies(primary).graph;
+  cudaGraphConditionalHandle compact, full;
+  CRR_CUDA_CHECK(cudaGraphConditionalHandleCreate(&compact, graph, 0, 0));
+  CRR_CUDA_CHECK(cudaGraphConditionalHandleCreate(&full, graph, 0, 0));
+  CRR_CUDA_CHECK(launch_dense_horizon_condition(compact, full, counts, config_.num_seeds,
+                                                COMPACT_DENSE_HORIZON, primary));
+  // Allow space for a terminal hold sample. Larger or invalid counts retain
+  // the original full-capacity branch, with no host readback on replay.
+  capture_conditional_body(primary, dense_stream_.get(), compact, [&](cudaStream_t body) {
+    enqueue(reinterpret_cast<CUstream>(body), COMPACT_DENSE_HORIZON);
+  });
+  capture_conditional_body(primary, dense_stream_.get(), full, [&](cudaStream_t body) {
+    enqueue(reinterpret_cast<CUstream>(body), capacity);
+  });
 }
 
 void TrajectoryOptimizerRuntime::finish_optimization(
@@ -3002,35 +3065,43 @@ void TrajectoryOptimizerRuntime::finish_optimization(
   auto* times = reinterpret_cast<float*>(timeopt_times_.ptr());
   auto* dt = reinterpret_cast<float*>(timeopt_dt_.ptr());
   auto* counts = reinterpret_cast<int32_t*>(timeopt_counts_.ptr());
+  const auto* seed_valid = reinterpret_cast<const uint8_t*>(active_seed_valid_.ptr());
+  const auto* pose_valid = reinterpret_cast<const uint8_t*>(retained_pose_valid_.ptr());
   CRR_CUDA_CHECK(launch_timeopt_times(result.duration, batch, capacity,
-      manifest_.interpolation_dt, times, dt, counts, stream));
-  const auto samples = timeopt_->sample(times, stream);
-  auto* scaled = reinterpret_cast<float*>(timeopt_scaled_states_.ptr());
-  const size_t values = static_cast<size_t>(batch) * capacity * dof;
-  CRR_CUDA_CHECK(launch_timeopt_scale(samples,
-      reinterpret_cast<const float*>(execution_speed_scale_.ptr()), values, scaled, stream));
-  const TrajectoryValidationRequest validation{samples.position, scaled,
-      scaled + values, scaled + 2 * values, capacity, stream};
-  const auto* violation = validate(validation, true);
-  // Dynamic infeasibility may be repaired; preserve seed and pose constraints.
-  CRR_CUDA_CHECK(launch_timeopt_rank(result.success, violation, counts,
-      reinterpret_cast<const uint8_t*>(active_seed_valid_.ptr()),
-      reinterpret_cast<const uint8_t*>(retained_pose_valid_.ptr()), result.duration, batch,
-      reinterpret_cast<uint8_t*>(retained_success_.ptr()),
-      reinterpret_cast<float*>(retained_rank_score_.ptr()), stream));
-  finalize(request, reinterpret_cast<CUstream>(stream));
-  const auto* selected = request.selected_seed ? request.selected_seed
-      : reinterpret_cast<const int32_t*>(selected_seed_.ptr());
-  CRR_CUDA_CHECK(launch_timeopt_output(samples, result.timing_controls, dt, result.duration, counts,
-      selected, request.success, capacity, dof,
-      reinterpret_cast<float*>(timeopt_states_.ptr()),
-      reinterpret_cast<float*>(timeopt_metadata_.ptr()),
-      reinterpret_cast<int32_t*>(timeopt_count_.ptr()),
-      reinterpret_cast<float*>(timeopt_timing_controls_.ptr()), stream));
-  CRR_CUDA_CHECK(launch_timeopt_spatial_output(
-      timeopt.knots, boundaries, knot_dt, selected, request.success, batch,
-      manifest_.num_knots, dof,
-      reinterpret_cast<float*>(timeopt_spatial_controls_.ptr()), stream));
+      manifest_.interpolation_dt, times, dt, counts, result.success, seed_valid, pose_valid,
+      reinterpret_cast<TimeOptOverflowSample*>(timeopt_overflow_.ptr()), stream));
+  with_dense_horizon(reinterpret_cast<CUstream>(stream), counts,
+      [&](CUstream active_stream, int horizon) {
+        const auto cuda_stream = reinterpret_cast<cudaStream_t>(active_stream);
+        const auto samples = timeopt_->sample_prefix(times, horizon, cuda_stream);
+        auto* scaled = reinterpret_cast<float*>(timeopt_scaled_states_.ptr());
+        const size_t values = static_cast<size_t>(batch) * horizon * dof;
+        CRR_CUDA_CHECK(launch_timeopt_scale(samples,
+            reinterpret_cast<const float*>(execution_speed_scale_.ptr()), values, scaled, cuda_stream));
+        const TrajectoryValidationRequest validation{samples.position, scaled,
+            scaled + values, scaled + 2 * values, horizon, cuda_stream};
+        const auto* violation = validate(validation, true);
+        // Dynamic infeasibility may be repaired; preserve seed and pose constraints.
+        CRR_CUDA_CHECK(launch_timeopt_rank(result.success, violation, counts,
+            seed_valid, pose_valid, result.duration, batch,
+            reinterpret_cast<uint8_t*>(retained_success_.ptr()),
+            reinterpret_cast<float*>(retained_rank_score_.ptr()), cuda_stream));
+        auto active = request;
+        active.stream = cuda_stream;
+        finalize(active, active_stream);
+        const auto* selected = request.selected_seed ? request.selected_seed
+            : reinterpret_cast<const int32_t*>(selected_seed_.ptr());
+        CRR_CUDA_CHECK(launch_timeopt_output(samples, result.timing_controls, dt, result.duration,
+            counts, selected, request.success, capacity, horizon, dof,
+            reinterpret_cast<float*>(timeopt_states_.ptr()),
+            reinterpret_cast<float*>(timeopt_metadata_.ptr()),
+            reinterpret_cast<int32_t*>(timeopt_count_.ptr()),
+            reinterpret_cast<float*>(timeopt_timing_controls_.ptr()), cuda_stream));
+        CRR_CUDA_CHECK(launch_timeopt_spatial_output(
+            timeopt.knots, boundaries, knot_dt, selected, request.success, batch,
+            manifest_.num_knots, dof,
+            reinterpret_cast<float*>(timeopt_spatial_controls_.ptr()), cuda_stream));
+      });
 }
 
 void TrajectoryOptimizerRuntime::set_execution_speed_scale(float scale) {
@@ -3053,6 +3124,23 @@ TimeOptTrajectory TrajectoryOptimizerRuntime::timeopt_trajectory() const {
           metadata, metadata + 1, reinterpret_cast<const int32_t*>(timeopt_count_.ptr()), capacity,
           reinterpret_cast<const float*>(timeopt_timing_controls_.ptr()), TIMEOPT_CONTROL_COUNT,
           reinterpret_cast<const float*>(timeopt_spatial_controls_.ptr()), manifest_.num_knots + 6};
+}
+
+TimeOptCapacityDiagnostics TrajectoryOptimizerRuntime::last_timeopt_capacity_diagnostics() const {
+  TimeOptCapacityDiagnostics diag;
+  diag.capacity = manifest_.interpolation_buffer_size;
+  if (!timeopt_) return diag;
+  CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
+  std::vector<TimeOptOverflowSample> overflow(config_.num_seeds);
+  CRR_CUDA_CHECK(cudaMemcpy(overflow.data(), reinterpret_cast<const void*>(timeopt_overflow_.ptr()),
+                            overflow.size() * sizeof(TimeOptOverflowSample), cudaMemcpyDeviceToHost));
+  for (const auto& sample : overflow) {
+    if (sample.required_samples == 0) continue;
+    ++diag.overflow_seeds;
+    diag.max_required_samples = std::max(diag.max_required_samples, sample.required_samples);
+    diag.max_duration_sec = std::max(diag.max_duration_sec, sample.duration_sec);
+  }
+  return diag;
 }
 
 void TrajectoryOptimizerRuntime::optimize(

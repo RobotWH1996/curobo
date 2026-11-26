@@ -179,12 +179,26 @@ class TrajectoryTimeOptRuntime {
   }
 
   TrajectoryTimeOptSamples sample(const float *times, cudaStream_t stream) {
+    return sample_prefix(times, w_.samples, stream);
+  }
+
+  TrajectoryTimeOptSamples sample_prefix(const float *times, int samples, cudaStream_t stream) {
     if (!has_result_ || !times)
       throw std::invalid_argument("sample requires a timeopt and CUDA times");
     CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
-    copy(w_.sample_times, times, static_cast<size_t>(w_.batch) * w_.samples, stream);
-    execute(true, stream);
-    const size_t plane = static_cast<size_t>(w_.batch) * w_.samples * w_.dof;
+    if (samples == w_.samples) {
+      copy(w_.sample_times, times, static_cast<size_t>(w_.batch) * w_.samples, stream);
+      execute(true, stream);
+    } else {
+      const size_t compact_stride = static_cast<size_t>(samples) * sizeof(float);
+      const size_t full_stride = static_cast<size_t>(w_.samples) * sizeof(float);
+      CRR_CUDA_CHECK(cudaMemcpy2DAsync(w_.sample_times, compact_stride, times, full_stride,
+                                     compact_stride, w_.batch, cudaMemcpyDeviceToDevice, stream));
+      TimeOptWorkspace prefix = w_;
+      prefix.samples = samples;
+      CRR_CUDA_CHECK(launch_timeopt_sample(prefix, stream));
+    }
+    const size_t plane = static_cast<size_t>(w_.batch) * samples * w_.dof;
     return {w_.sample_joints, w_.sample_joints + plane, w_.sample_joints + 2 * plane,
             w_.sample_joints + 3 * plane};
   }
@@ -351,6 +365,10 @@ TrajectoryTimeOptResult TrajectoryTimeOpt::timeopt(const TrajectoryTimeOptReques
 }
 TrajectoryTimeOptSamples TrajectoryTimeOpt::sample(const float *times, cudaStream_t stream) const {
   return runtime_->sample(times, stream);
+}
+TrajectoryTimeOptSamples TrajectoryTimeOpt::sample_prefix(
+    const float *times, int samples, cudaStream_t stream) const {
+  return runtime_->sample_prefix(times, samples, stream);
 }
 const float *TrajectoryTimeOpt::sample_progress() const { return runtime_->sample_progress(); }
 void TrajectoryTimeOpt::update_links_inertial(const LinkInertialUpdates &updates) {

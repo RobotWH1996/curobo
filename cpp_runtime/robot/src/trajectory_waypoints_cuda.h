@@ -15,6 +15,10 @@ inline constexpr int TOOL_PATH_SETTINGS = 10;
 enum class ToolPathMode { DISABLED = 0, LINE = 1, WAYPOINTS = 2 };
 enum class OptimizationCondition { INITIAL_FAILED, INITIAL_SUCCEEDED, REFINEMENT_FAILED };
 
+cudaError_t launch_dense_horizon_condition(
+    cudaGraphConditionalHandle compact, cudaGraphConditionalHandle full,
+    const int32_t *counts, int seeds, int compact_horizon, cudaStream_t stream);
+
 cudaError_t launch_tool_path_settings(float *settings, ToolPathMode mode, bool orientation,
                                       float path_position, float path_orientation,
                                       float final_position, float final_orientation,

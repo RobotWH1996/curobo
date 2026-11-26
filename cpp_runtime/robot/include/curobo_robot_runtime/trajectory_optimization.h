@@ -99,6 +99,13 @@ struct TrajectoryOptimizationInfo {
   int native_horizon() const { return spline_layout.native_horizon; }
 };
 
+struct TimeOptCapacityDiagnostics {
+  int capacity{0};
+  int overflow_seeds{0};
+  int max_required_samples{0};
+  float max_duration_sec{0.0F};
+};
+
 /** Borrowed per-seed solutions, valid until the next optimization call.
  * Knots are [B,K,D], states [B,T,D], and dt/success [B]. dt is the state
  * timestep; multiply by (T-1)/(K+4) to recover the knot interval.

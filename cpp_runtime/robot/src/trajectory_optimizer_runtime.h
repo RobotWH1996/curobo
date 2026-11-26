@@ -46,6 +46,7 @@ class TrajectoryOptimizerRuntime final {
   void optimize(const TrajectoryOptimizationRequest& request) const;
   TrajectoryOptimizationCandidates candidates() const;
   TimeOptTrajectory timeopt_trajectory() const;
+  TimeOptCapacityDiagnostics last_timeopt_capacity_diagnostics() const;
   void set_execution_speed_scale(float scale);
   const int32_t *validate(const TrajectoryValidationRequest &request,
                           bool timeopt = false) const;
@@ -82,6 +83,8 @@ class TrajectoryOptimizerRuntime final {
   void enqueue_conditional(const TrajectoryOptimizationRequest &request,
                            OptimizationCondition condition,
                            const std::function<void(cudaStream_t)> &enqueue) const;
+  void with_dense_horizon(CUstream stream, const int32_t *counts,
+                          const std::function<void(CUstream, int)> &enqueue) const;
   void finish_optimization(
       const TrajectoryOptimizationRequest& request) const;
   void validate_config() const;
@@ -140,8 +143,9 @@ class TrajectoryOptimizerRuntime final {
   void optimize_pass(const TrajectoryOptimizationRequest &request, CUstream stream, int iterations,
                      bool continuation = false) const;
   void validate_interpolated(CUdeviceptr knots, CUstream stream) const;
-  void validate_states(CUstream stream, bool timeopt = false, bool check_tool_path = true,
-                       int configuration_count = 0, uint8_t *configuration_violations = nullptr) const;
+  void validate_interpolated_for_horizon(CUdeviceptr knots, CUstream stream, int horizon) const;
+  void validate_states(CUstream stream, int horizon, bool timeopt, bool check_tool_path,
+                       uint8_t *configuration_violations = nullptr) const;
   void accumulate(bool first_pass,
                   const TrajectoryOptimizationRequest& request,
                   CUstream stream) const;
@@ -163,6 +167,7 @@ class TrajectoryOptimizerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer timeopt_times_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_dt_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_counts_;
+  mutable curobo_robot_runtime::DeviceBuffer timeopt_overflow_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_states_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_metadata_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_count_;
@@ -179,6 +184,7 @@ class TrajectoryOptimizerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer initial_dt_;
   mutable curobo_robot_runtime::DeviceBuffer initial_iterations_;
   cudaStream_t conditional_stream_{nullptr};
+  std::unique_ptr<CUstream_st, decltype(&cudaStreamDestroy)> dense_stream_{nullptr, cudaStreamDestroy};
   curobo_robot_runtime::DeviceBuffer execution_speed_scale_;
 
   curobo_robot_runtime::DeviceBuffer position_bounds_;
@@ -362,6 +368,7 @@ class TrajectoryOptimizerRuntime final {
   curobo_robot_runtime::KernelModule lbfgs_kernel_;
   std::unique_ptr<RolloutStreams> rollout_streams_;
   std::unique_ptr<RolloutStreams> conditional_rollout_streams_;
+  std::unique_ptr<RolloutStreams> dense_rollout_streams_;
 };
 
 }  // namespace curobo::robot::detail

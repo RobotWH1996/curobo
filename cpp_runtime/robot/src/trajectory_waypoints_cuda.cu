@@ -73,6 +73,19 @@ __global__ void moving_reference_margin(float *dt, const float *velocity, const 
 
 __global__ void iteration_count(int32_t *value, int increment) { *value += increment; }
 
+__global__ void dense_horizon_condition(cudaGraphConditionalHandle compact,
+                                         cudaGraphConditionalHandle full,
+                                         const int32_t *counts, int seeds,
+                                         int compact_horizon) {
+  bool fits = true;
+  for (int seed = 0; seed < seeds; ++seed) {
+    const int count = counts[seed];
+    fits = fits && count > 0 && count < compact_horizon;
+  }
+  cudaGraphSetConditional(compact, fits ? 1U : 0U);
+  cudaGraphSetConditional(full, fits ? 0U : 1U);
+}
+
 __global__ void optimization_condition(cudaGraphConditionalHandle handle, const int32_t *native,
                                        const uint8_t *result, OptimizationCondition condition) {
   bool enabled = false;
@@ -245,6 +258,13 @@ __global__ void validate_tool_path(const float *positions, const float *quaterni
     atomicMax(violation + seed, 1);
 }
 }  // namespace
+
+cudaError_t launch_dense_horizon_condition(
+    cudaGraphConditionalHandle compact, cudaGraphConditionalHandle full,
+    const int32_t *counts, int seeds, int compact_horizon, cudaStream_t stream) {
+  dense_horizon_condition<<<1, 1, 0, stream>>>(compact, full, counts, seeds, compact_horizon);
+  return cudaGetLastError();
+}
 
 cudaError_t launch_tool_path_settings(float *output, ToolPathMode mode, bool orientation, float p,
                                       float r, float fp, float fr, float x, float y, float z,
