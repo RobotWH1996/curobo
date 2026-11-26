@@ -262,6 +262,13 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
         1;
     manifest_.interpolation_dt = config_.interpolation_dt;
   }
+  if (config_.interpolation_buffer_size < 0)
+    throw std::invalid_argument("invalid dense interpolation buffer size");
+  if (config_.interpolation_buffer_size > 0) {
+    if (config_.interpolation_buffer_size > manifest_.interpolation_buffer_size)
+      throw std::invalid_argument("interpolation_buffer_size exceeds exported artifact capacity");
+    manifest_.interpolation_buffer_size = config_.interpolation_buffer_size;
+  }
   validate_config();
   validate_scene();
   collision_ = std::move(collision);
@@ -335,8 +342,12 @@ CuroboRobotInfo TrajectoryOptimizerRuntime::robot_info() const {
 
 TrajectoryOptimizationInfo TrajectoryOptimizerRuntime::info() const {
   return TrajectoryOptimizationInfo{
-      manifest_.num_dof,         manifest_.num_knots,     manifest_.trajectory_steps,
-      manifest_.num_tool_frames, manifest_.spline_layout,
+      manifest_.num_dof,
+      manifest_.num_knots,
+      manifest_.trajectory_steps,
+      manifest_.num_tool_frames,
+      manifest_.spline_layout,
+      manifest_.interpolation_buffer_size,
   };
 }
 
@@ -2290,8 +2301,6 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
   const int seeds = configuration_count ? 1 : config_.num_seeds;
   const int validation_horizon = configuration_count ? configuration_count
                                                       : manifest_.interpolation_buffer_size;
-  const size_t interpolation_values =
-      static_cast<size_t>(seeds) * validation_horizon * manifest_.num_dof;
   auto* streams = rollout_streams(stream);
   const auto primary = reinterpret_cast<cudaStream_t>(stream);
   const auto driver = [&](RolloutStream role) {
@@ -2347,10 +2356,10 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
     wait(primary, RolloutEvent::DYNAMICS_READY);
   }
 
+  const auto data = [](const auto &buffer) { return reinterpret_cast<const float *>(buffer.ptr()); };
+  const float *effort_bounds = (check_effort && rollout_ != nullptr)
+      ? reinterpret_cast<const float *>(rollout_->effort_bounds()) : nullptr;
   if (configuration_count) {
-    const auto data = [](const auto &buffer) { return reinterpret_cast<const float *>(buffer.ptr()); };
-    const float *effort_bounds = check_effort
-        ? reinterpret_cast<const float *>(rollout_->effort_bounds()) : nullptr;
     CRR_CUDA_CHECK(launch_validate_configurations(
         data(validation_position_), data(validation_world_collision_cost_),
         data(validation_self_collision_cost_), data(position_bounds_), data(velocity_bounds_),
@@ -2361,78 +2370,16 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
   }
 
   validation_violation_.clear(reinterpret_cast<cudaStream_t>(stream));
-  auto position =
-      array_1d(validation_position_.ptr(), interpolation_values, sizeof(float));
-  auto velocity =
-      array_1d(validation_velocity_.ptr(), interpolation_values, sizeof(float));
-  auto acceleration = array_1d(
-      validation_acceleration_.ptr(), interpolation_values, sizeof(float));
-  auto jerk =
-      array_1d(validation_jerk_.ptr(), interpolation_values, sizeof(float));
-  auto effort = array_1d(validation_joint_effort_.ptr(), interpolation_values,
-                         sizeof(float));
-  const int validation_states = config_.num_seeds * validation_horizon;
-  auto world_collision = array_1d(
-      validation_world_collision_cost_.ptr(), validation_states, sizeof(float));
-  auto self_collision = array_1d(
-      validation_self_collision_cost_.ptr(), validation_states, sizeof(float));
-  const auto dof_bytes =
-      static_cast<CUdeviceptr>(manifest_.num_dof * sizeof(float));
-  auto position_lower =
-      array_1d(position_bounds_.ptr(), manifest_.num_dof, sizeof(float));
-  auto position_upper = array_1d(position_bounds_.ptr() + dof_bytes,
-                                 manifest_.num_dof, sizeof(float));
-  auto velocity_lower =
-      array_1d(velocity_bounds_.ptr(), manifest_.num_dof, sizeof(float));
-  auto velocity_upper = array_1d(velocity_bounds_.ptr() + dof_bytes,
-                                 manifest_.num_dof, sizeof(float));
-  auto acceleration_lower =
-      array_1d(acceleration_bounds_.ptr(), manifest_.num_dof, sizeof(float));
-  auto acceleration_upper = array_1d(
-      acceleration_bounds_.ptr() + dof_bytes, manifest_.num_dof, sizeof(float));
-  auto jerk_lower =
-      array_1d(jerk_bounds_.ptr(), manifest_.num_dof, sizeof(float));
-  auto jerk_upper = array_1d(jerk_bounds_.ptr() + dof_bytes,
-                             manifest_.num_dof, sizeof(float));
-  const auto effort_bounds_pointer =
-      rollout_ == nullptr ? position_bounds_.ptr() : rollout_->effort_bounds();
-  auto effort_lower =
-      array_1d(effort_bounds_pointer, manifest_.num_dof, sizeof(float));
-  auto effort_upper = array_1d(effort_bounds_pointer + dof_bytes,
-                               manifest_.num_dof, sizeof(float));
-  auto violation =
-      array_1d(validation_violation_.ptr(), config_.num_seeds, sizeof(int32_t));
-  float constraint_tolerance = config_.constraint_tolerance;
-  uint8_t effort_active = check_effort ? 1U : 0U;
-  const auto validation_bounds = warp_bounds_1d(interpolation_values);
-  std::vector<void*> validation_arguments{
-      const_cast<WarpLaunchBounds1*>(&validation_bounds),
-      &position,
-      &velocity,
-      &acceleration,
-      &jerk,
-      &effort,
-      &world_collision,
-      &self_collision,
-      &position_lower,
-      &position_upper,
-      &velocity_lower,
-      &velocity_upper,
-      &acceleration_lower,
-      &acceleration_upper,
-      &jerk_lower,
-      &jerk_upper,
-      &effort_lower,
-      &effort_upper,
-      &violation,
-      &constraint_tolerance,
-      &effort_active,
-  };
-  validate_interpolated_kernel_.launch(
-      grid_for(interpolation_values, manifest_.validate_interpolated.block_dim),
-      static_cast<unsigned int>(manifest_.validate_interpolated.block_dim),
-      static_cast<unsigned int>(manifest_.validate_interpolated.shared_memory),
-      stream, validation_arguments);
+  // Use runtime validation_horizon rather than the exported Warp CUBIN, whose
+  // compiled constant assumes the full artifact interpolation_buffer_size.
+  CRR_CUDA_CHECK(launch_validate_interpolated_states(
+      data(validation_position_), data(validation_velocity_), data(validation_acceleration_),
+      data(validation_jerk_), data(validation_joint_effort_),
+      data(validation_world_collision_cost_), data(validation_self_collision_cost_),
+      data(position_bounds_), data(velocity_bounds_), data(acceleration_bounds_),
+      data(jerk_bounds_), effort_bounds, config_.constraint_tolerance, config_.num_seeds,
+      validation_horizon, manifest_.num_dof,
+      reinterpret_cast<int32_t *>(validation_violation_.ptr()), primary));
   if (!check_tool_path) return;
   const auto *counts = reinterpret_cast<const int32_t *>(timeopt ? timeopt_counts_.ptr()
                                                                  : interpolation_horizon_.ptr());

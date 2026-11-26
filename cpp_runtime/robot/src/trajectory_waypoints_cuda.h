@@ -43,6 +43,13 @@ cudaError_t launch_validate_configurations(
     const float *jerk_bounds, const float *effort, const float *effort_bounds,
     float tolerance, int count, int dof, uint8_t *violations, cudaStream_t stream);
 
+cudaError_t launch_validate_interpolated_states(
+    const float *position, const float *velocity, const float *acceleration, const float *jerk,
+    const float *effort, const float *world_cost, const float *self_cost,
+    const float *position_bounds, const float *velocity_bounds, const float *acceleration_bounds,
+    const float *jerk_bounds, const float *effort_bounds,
+    float tolerance, int seeds, int horizon, int dof, int32_t *violation, cudaStream_t stream);
+
 cudaError_t launch_moving_reference_margin(float *dt, const float *velocity,
                                            const float *acceleration, int seeds, int dof,
                                            float factor, float maximum_dt, cudaStream_t stream);

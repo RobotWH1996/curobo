@@ -57,6 +57,8 @@ struct TrajectoryOptimizationConfig {
   int num_knots{16};
   /** Optional output/dense sampling period; zero uses the artifact value. */
   float interpolation_dt{0.F};
+  /** Optional dense interpolation buffer size; zero uses the artifact value. */
+  int interpolation_buffer_size{0};
 };
 
 /** Borrowed executable trajectory for the selected timeopt seed.
@@ -92,6 +94,7 @@ struct TrajectoryOptimizationInfo {
   int trajectory_steps{0};
   int num_tool_frames{0};
   SplineLayout spline_layout{};
+  int interpolation_buffer_size{0};
   /** Native state count before dense interpolation. */
   int native_horizon() const { return spline_layout.native_horizon; }
 };

@@ -35,6 +35,29 @@ __global__ void validate_configurations(
   violations[state] = invalid ? 1 : 0;
 }
 
+__global__ void validate_interpolated_states(
+    const float *position, const float *velocity, const float *acceleration, const float *jerk,
+    const float *effort, const float *world_cost, const float *self_cost,
+    const float *position_bounds, const float *velocity_bounds, const float *acceleration_bounds,
+    const float *jerk_bounds, const float *effort_bounds,
+    float tolerance, int seeds, int horizon, int dof, int32_t *violation) {
+  const int state = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total_states = seeds * horizon;
+  if (state >= total_states) return;
+  const int seed = state / horizon;
+  const float collision = world_cost[state] + self_cost[state];
+  bool invalid = !isfinite(collision) || collision > tolerance;
+  for (int joint = 0; joint < dof && !invalid; ++joint) {
+    const int i = state * dof + joint;
+    invalid = outside(position[i], position_bounds, joint, dof, tolerance) ||
+              outside(velocity[i], velocity_bounds, joint, dof, tolerance) ||
+              outside(acceleration[i], acceleration_bounds, joint, dof, tolerance) ||
+              outside(jerk[i], jerk_bounds, joint, dof, tolerance) ||
+              (effort_bounds && outside(effort[i], effort_bounds, joint, dof, tolerance));
+  }
+  if (invalid) atomicMax(&violation[seed], 1);
+}
+
 __global__ void moving_reference_margin(float *dt, const float *velocity, const float *acceleration,
                                         int seeds, int dof, float factor, float maximum_dt) {
   const int seed = blockIdx.x * blockDim.x + threadIdx.x;
@@ -260,6 +283,21 @@ cudaError_t launch_validate_configurations(
   validate_configurations<<<(count + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, 0, stream>>>(
       position, world_cost, self_cost, position_bounds, velocity_bounds, acceleration_bounds,
       jerk_bounds, effort, effort_bounds, tolerance, count, dof, violations);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_validate_interpolated_states(
+    const float *position, const float *velocity, const float *acceleration, const float *jerk,
+    const float *effort, const float *world_cost, const float *self_cost,
+    const float *position_bounds, const float *velocity_bounds, const float *acceleration_bounds,
+    const float *jerk_bounds, const float *effort_bounds,
+    float tolerance, int seeds, int horizon, int dof, int32_t *violation, cudaStream_t stream) {
+  const int total_states = seeds * horizon;
+  validate_interpolated_states<<<(total_states + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, 0,
+                                 stream>>>(
+      position, velocity, acceleration, jerk, effort, world_cost, self_cost, position_bounds,
+      velocity_bounds, acceleration_bounds, jerk_bounds, effort_bounds, tolerance, seeds, horizon,
+      dof, violation);
   return cudaGetLastError();
 }
 

@@ -261,12 +261,14 @@ CuroboRobotInfo MotionPlannerRuntime::robot_info() const {
 }
 
 MotionPlanningInfo MotionPlannerRuntime::info() const {
+  const auto trajopt_info = trajectory_optimizer_->info();
   return MotionPlanningInfo{
       manifest_.num_dof,
       manifest_.num_knots,
       manifest_.trajectory_steps,
       manifest_.max_rrt_path_nodes,
-      trajectory_optimizer_->info().spline_layout,
+      trajopt_info.spline_layout,
+      trajopt_info.interpolation_buffer_size,
   };
 }
 

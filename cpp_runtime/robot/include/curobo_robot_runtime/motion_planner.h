@@ -45,6 +45,7 @@ struct MotionPlanningInfo {
   int trajectory_steps{0};
   int max_rrt_path_nodes{0};
   SplineLayout spline_layout{};
+  int interpolation_buffer_size{0};
   /** Native state count shared with trajectory optimization. */
   int native_horizon() const { return spline_layout.native_horizon; }
 };
