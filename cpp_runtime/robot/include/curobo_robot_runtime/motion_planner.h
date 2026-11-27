@@ -89,7 +89,9 @@ struct MotionPlanningRequest {
   bool allow_rrt{true};
   int finetune_attempts{-1};
   float finetune_dt_scale{-1.0F};
-  /** Optional Cartesian-line objective applied by the TrajOpt stage. */
+  /** Optional Cartesian reference in CUDA device memory. For a static line goal,
+   * provide [num_tool_frames, 3/4]; for track_waypoints, provide aligned
+   * [trajectory_steps, num_tool_frames, 3/4] position and wxyz quaternion arrays. */
   const float* goal_tool_positions{nullptr};
   const float* goal_tool_quaternions{nullptr};
   bool constrain_tool_path{false};

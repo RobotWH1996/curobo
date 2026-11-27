@@ -313,10 +313,13 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
   if (config_.interpolation_dt < 0.F || !std::isfinite(config_.interpolation_dt))
     throw std::invalid_argument("invalid dense interpolation period");
   if (config_.interpolation_dt > 0.F) {
-    manifest_.minimum_interpolation_buffer_size =
-        static_cast<int>(std::ceil((manifest_.minimum_interpolation_buffer_size - 1) *
-                                   manifest_.interpolation_dt / config_.interpolation_dt)) +
-        1;
+    const double required_samples = std::ceil(
+        (static_cast<double>(manifest_.minimum_interpolation_buffer_size) - 1.) *
+        manifest_.interpolation_dt / config_.interpolation_dt) + 1.;
+    if (!std::isfinite(required_samples) || required_samples < 1. ||
+        required_samples > manifest_.interpolation_buffer_size)
+      throw std::invalid_argument("interpolation_dt exceeds exported interpolation buffer capacity");
+    manifest_.minimum_interpolation_buffer_size = static_cast<int>(required_samples);
     manifest_.interpolation_dt = config_.interpolation_dt;
   }
   if (config_.interpolation_buffer_size < 0)

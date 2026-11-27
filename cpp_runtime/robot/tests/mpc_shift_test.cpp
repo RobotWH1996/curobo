@@ -61,6 +61,8 @@ void check_path_acceptance() {
   CRR_CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
   CRR_CUDA_CHECK(cudaGraphInstantiate(&executable, graph, 0));
   auto replay = [&] {
+    // Test uploads use the default stream and this graph replays on a nonblocking stream.
+    CRR_CUDA_CHECK(cudaStreamSynchronize(nullptr));
     CRR_CUDA_CHECK(cudaGraphLaunch(executable, stream));
     CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
   };

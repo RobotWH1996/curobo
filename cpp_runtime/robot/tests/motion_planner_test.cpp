@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -150,6 +151,18 @@ int main(int argc, char** argv) {
     config.inverse_kinematics.check_effort_limits = true;
     config.rrt.check_effort_limits = true;
     config.rrt.max_plans = config.trajectory_optimization.num_seeds;
+    {
+      auto invalid_config = config;
+      invalid_config.trajectory_optimization.interpolation_dt = std::numeric_limits<float>::min();
+      bool rejected = false;
+      try {
+        curobo::robot::MotionPlanner invalid_planner(argv[1], invalid_config);
+      } catch (const std::invalid_argument& error) {
+        rejected = std::string(error.what()) ==
+            "interpolation_dt exceeds exported interpolation buffer capacity";
+      }
+      if (!rejected) throw std::runtime_error("impossible interpolation period was not rejected");
+    }
     curobo::robot::MotionPlanner direct_planner(argv[1], config);
     const auto info = direct_planner.info();
     if (info.num_dof != 7 || info.num_knots != 16 ||
@@ -356,6 +369,45 @@ int main(int argc, char** argv) {
     DeviceValue<float> goal_quaternions(pose_quaternion_values);
     DeviceValue<float> pose_jacobians(pose_jacobian_values);
     curobo::robot::Kinematics kinematics(argv[1]);
+    {
+      kinematics.forward(start_device.get(), goal_positions.get(),
+                         goal_quaternions.get(), pose_jacobians.get(), 1, 1);
+      check_cuda(cudaDeviceSynchronize());
+      std::vector<float> start_positions(pose_position_values);
+      std::vector<float> start_quaternions(pose_quaternion_values);
+      goal_positions.download(start_positions.data());
+      goal_quaternions.download(start_quaternions.data());
+      std::vector<float> reference_positions(info.trajectory_steps * pose_position_values);
+      std::vector<float> reference_quaternions(info.trajectory_steps * pose_quaternion_values);
+      for (int step = 0; step < info.trajectory_steps; ++step) {
+        std::copy(start_positions.begin(), start_positions.end(),
+                  reference_positions.begin() + step * pose_position_values);
+        std::copy(start_quaternions.begin(), start_quaternions.end(),
+                  reference_quaternions.begin() + step * pose_quaternion_values);
+      }
+      DeviceValue<float> reference_positions_device(reference_positions.size());
+      DeviceValue<float> reference_quaternions_device(reference_quaternions.size());
+      reference_positions_device.upload(reference_positions.data());
+      reference_quaternions_device.upload(reference_quaternions.data());
+      auto temporal_request = request;
+      temporal_request.goal_position = start_device.get();
+      temporal_request.track_waypoints = true;
+      temporal_request.goal_tool_positions = reference_positions_device.get();
+      temporal_request.goal_tool_quaternions = reference_quaternions_device.get();
+      temporal_request.allow_rrt = false;
+      direct_planner.plan_optimized(temporal_request);
+      success.download(&success_value);
+      if (success_value != 1) {
+        throw std::runtime_error("direct motion planning did not retain the full temporal reference");
+      }
+      reference_positions[reference_positions.size() - pose_position_values] += 1.0F;
+      reference_positions_device.upload(reference_positions.data());
+      direct_planner.plan(temporal_request);
+      success.download(&success_value);
+      if (success_value != 0) {
+        throw std::runtime_error("direct motion planning did not check the final temporal reference");
+      }
+    }
     kinematics.forward(goal_device.get(), goal_positions.get(),
                        goal_quaternions.get(), pose_jacobians.get(), 1, 1);
     check_cuda(cudaDeviceSynchronize());

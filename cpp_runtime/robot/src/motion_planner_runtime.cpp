@@ -318,8 +318,8 @@ void MotionPlannerRuntime::set_tool_upright(const std::vector<float> &weights,
 }
 
 void MotionPlannerRuntime::update_fixed_transforms(const std::vector<float> &transforms) {
+  // The grasp IK owns its workspace but shares the ordinary IK model.
   inverse_kinematics_->update_fixed_transforms(transforms);
-  if (grasp_inverse_kinematics_) grasp_inverse_kinematics_->update_fixed_transforms(transforms);
   rrt_->update_fixed_transforms(transforms);
   trajectory_optimizer_->update_fixed_transforms(transforms);
 }
@@ -787,8 +787,11 @@ void MotionPlannerRuntime::allocate_workspace() {
   staged_seed_start_positions_.allocate(seeds * dof * sizeof(float));
   staged_seed_goal_positions_.allocate(seeds * dof * sizeof(float));
   staged_seed_valid_.allocate(seeds * sizeof(uint8_t));
-  staged_tool_goal_positions_.allocate(tool_frames * 3 * sizeof(float));
-  staged_tool_goal_quaternions_.allocate(tool_frames * 4 * sizeof(float));
+  const auto tool_reference_frames = checked_product(steps, tool_frames, "motion tool reference");
+  staged_tool_goal_positions_.allocate(checked_product(
+      tool_reference_frames, 3 * sizeof(float), "motion tool reference positions"));
+  staged_tool_goal_quaternions_.allocate(checked_product(
+      tool_reference_frames, 4 * sizeof(float), "motion tool reference quaternions"));
   staged_ik_seed_positions_.allocate(
       static_cast<size_t>(inverse_kinematics_->config().lm_num_seeds) * dof *
       sizeof(float));
@@ -1176,6 +1179,8 @@ void MotionPlannerRuntime::plan(const MotionPlanningRequest& request,
       static_cast<size_t>(config_.trajectory_optimization.num_seeds);
   const auto tool_frames =
       static_cast<size_t>(trajectory_optimizer_->info().num_tool_frames);
+  const auto reference_frames = request.track_waypoints
+      ? static_cast<size_t>(manifest_.trajectory_steps) * tool_frames : tool_frames;
   const auto copy_to_staging = [&](curobo_robot_runtime::DeviceBuffer* output,
                                    const void* input, size_t bytes) {
     CRR_CUDA_CHECK(cudaMemcpyAsync(
@@ -1229,14 +1234,14 @@ void MotionPlannerRuntime::plan(const MotionPlanningRequest& request,
   if (request.goal_tool_positions != nullptr) {
     copy_to_staging(&staged_tool_goal_positions_,
                     request.goal_tool_positions,
-                    tool_frames * 3 * sizeof(float));
+                    reference_frames * 3 * sizeof(float));
     stable_request.goal_tool_positions = reinterpret_cast<const float*>(
         staged_tool_goal_positions_.ptr());
   }
   if (request.goal_tool_quaternions != nullptr) {
     copy_to_staging(&staged_tool_goal_quaternions_,
                     request.goal_tool_quaternions,
-                    tool_frames * 4 * sizeof(float));
+                    reference_frames * 4 * sizeof(float));
     stable_request.goal_tool_quaternions = reinterpret_cast<const float*>(
         staged_tool_goal_quaternions_.ptr());
   }
